@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Send, Search, MoreVertical, Phone, Video, Archive, Edit2, Pin, Trash2, MessageSquarePlus, X } from 'lucide-react';
+import { Users, Send, Search, MoreVertical, Phone, Video, Archive, Edit2, Pin, Trash2, MessageSquarePlus, X, MessageSquare } from 'lucide-react';
 import { useChatStore } from '../store/chatStore';
 import { supabase } from '../lib/supabase';
 import { toast } from 'react-hot-toast';
@@ -22,6 +22,7 @@ interface ChatMessage {
   sender: 'user' | 'agent' | 'bot' | 'ai';
   created_at: string;
   read_at?: string | null;
+  status?: 'sent' | 'delivered' | 'read';
 }
 
 interface MessageAction {
@@ -85,34 +86,59 @@ export const LiveChat: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data: sessionsData, error } = await supabase
+      // First get all sessions
+      const { data: sessionsData, error: sessionsError } = await supabase
         .from('chat_sessions')
-        .select(`
-          *,
-          chat_messages (
-            content,
-            created_at,
-            read_at
-          )
-        `)
+        .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (sessionsError) throw sessionsError;
 
-      const processedSessions = sessionsData.map(session => ({
-        ...session,
-        last_message: session.chat_messages?.[session.chat_messages.length - 1]?.content || '',
-        unread_count: session.chat_messages?.filter(msg => !msg.read_at)?.length || 0
-      }));
+      // Then get the last message for each session
+      const sessionsWithMessages = await Promise.all(
+        sessionsData.map(async (session) => {
+          const { data: messages, error: messagesError } = await supabase
+            .from('chat_messages')
+            .select('*')
+            .eq('session_id', session.id)
+            .order('created_at', { ascending: false })
+            .limit(1);
 
-      setSessions(processedSessions);
+          if (messagesError) throw messagesError;
+
+          const unreadCount = await getUnreadCount(session.id);
+
+          return {
+            ...session,
+            last_message: messages?.[0]?.content || '',
+            unread_count: unreadCount
+          };
+        })
+      );
+
+      setSessions(sessionsWithMessages);
     } catch (error) {
       console.error('Error loading sessions:', error);
       toast.error('Failed to load chat sessions');
     } finally {
       setLoading(false);
     }
+  };
+
+  const getUnreadCount = async (sessionId: string) => {
+    const { count, error } = await supabase
+      .from('chat_messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('session_id', sessionId)
+      .is('read_at', null);
+
+    if (error) {
+      console.error('Error getting unread count:', error);
+      return 0;
+    }
+
+    return count || 0;
   };
 
   const loadMessages = async (sessionId: string) => {
@@ -133,11 +159,10 @@ export const LiveChat: React.FC = () => {
 
   const markMessagesAsRead = async (sessionId: string) => {
     try {
-      const { error } = await supabase
-        .from('chat_messages')
-        .update({ read_at: new Date().toISOString() })
-        .eq('session_id', sessionId)
-        .is('read_at', null);
+      const { error } = await supabase.rpc('mark_messages_as_read', {
+        p_session_id: sessionId,
+        p_message_id: messages[messages.length - 1]?.id
+      });
 
       if (error) throw error;
 
@@ -313,6 +338,7 @@ export const LiveChat: React.FC = () => {
           session_id: selectedSession,
           content: newMessage,
           sender: 'agent',
+          status: 'sent'
         });
 
       if (error) throw error;
@@ -413,101 +439,221 @@ export const LiveChat: React.FC = () => {
         </div>
 
         <div className="overflow-y-auto flex-1">
-          {filteredSessions.map((session) => (
-            <div
-              key={session.id}
-              onClick={() => setSelectedSession(session.id)}
-              className={`p-4 cursor-pointer border-b transition-colors ${
-                selectedSession === session.id 
-                  ? 'bg-blue-50' 
-                  : 'hover:bg-gray-50'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 shrink-0 rounded-full flex items-center justify-center ${
-                  session.status === 'active' 
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-gray-100 text-gray-700'
-                }`}>
-                  {session.visitor_id.slice(0, 2).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-medium truncate">
-                      {session.visitor_name || `Visitor ${session.visitor_id.slice(0, 8)}`}
-                    </h3>
-                    <span className="text-xs text-gray-500 ml-2 shrink-0">
-                      {formatDate(session.created_at)}
-                    </span>
+          {loading ? (
+            <div className="flex items-center justify-center h-32">
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+            </div>
+          ) : filteredSessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-32 text-gray-500">
+              <MessageSquare className="w-8 h-8 mb-2" />
+              <p>No conversations yet</p>
+            </div>
+          ) : (
+            filteredSessions.map((session) => (
+              <div
+                key={session.id}
+                onClick={() => setSelectedSession(session.id)}
+                className={`p-4 cursor-pointer border-b transition-colors ${
+                  selectedSession === session.id 
+                    ? 'bg-blue-50' 
+                    : 'hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 shrink-0 rounded-full flex items-center justify-center ${
+                    session.status === 'active' 
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-gray-100 text-gray-700'
+                  }`}>
+                    {session.visitor_id.slice(0, 2).toUpperCase()}
                   </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <p className="text-sm text-gray-500 truncate">
-                      {session.last_message || 'No messages yet'}
-                    </p>
-                    {session.unread_count > 0 && (
-                      <span className="shrink-0 px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">
-                        {session.unread_count}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-medium truncate">
+                        {session.visitor_name || `Visitor ${session.visitor_id.slice(0, 8)}`}
+                      </h3>
+                      <span className="text-xs text-gray-500 ml-2 shrink-0">
+                        {formatDate(session.created_at)}
                       </span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="text-sm text-gray-500 truncate">
+                        {session.last_message || 'No messages yet'}
+                      </p>
+                      {session.unread_count > 0 && (
+                        <span className="shrink-0 px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">
+                          {session.unread_count}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {selectedSession ? (
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="p-4 border-b flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
+                {sessions.find(s => s.id === selectedSession)?.visitor_id.slice(0, 2).toUpperCase()}
+              </div>
+              <div>
+                <h3 className="font-medium">
+                  {sessions.find(s => s.id === selectedSession)?.visitor_name || 
+                   `Visitor ${sessions.find(s => s.id === selectedSession)?.visitor_id.slice(0, 8)}`}
+                </h3>
+                <p className="text-sm text-gray-500">
+                  Session started {formatDate(sessions.find(s => s.id === selectedSession)?.created_at || '')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => closeSession(selectedSession)}
+                className="p-2 text-gray-600 hover:bg-gray-100 rounded-full"
+                title="Close Chat"
+              >
+                <Archive className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setShowNotes(!showNotes)}
+                className="p-2 text-gray-600 hover:bg-gray-100 rounded-full"
+                title="Notes"
+              >
+                <Edit2 className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => togglePinSession(selectedSession)}
+                className={`p-2 rounded-full ${
+                  sessions.find(s => s.id === selectedSession)?.pinned
+                    ? 'text-blue-600 bg-blue-50'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+                title="Pin Chat"
+              >
+                <Pin className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.map((message, index) => (
+              <div
+                key={message.id}
+                className={`flex ${
+                  message.sender === 'user' ? 'justify-end' : 'justify-start'
+                }`}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  handleMessageAction(e, message.id);
+                }}
+              >
+                <div
+                  className={`max-w-[70%] p-3 rounded-lg ${
+                    message.sender === 'user'
+                      ? 'bg-blue-500 text-white'
+                      : message.sender === 'ai'
+                      ? 'bg-purple-100 text-purple-900'
+                      : 'bg-gray-100 text-gray-900'
+                  }`}
+                >
+                  <p>{message.content}</p>
+                  <div className="text-xs mt-1 opacity-70 flex items-center gap-1">
+                    {formatTime(message.created_at)}
+                    {message.status === 'read' && (
+                      <span className="text-xs">✓✓</span>
                     )}
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
 
-        {activeMessageAction && (
-          <>
-            <div
-              className="fixed inset-0"
-              onClick={() => setActiveMessageAction(null)}
-            />
-            <div
-              className="absolute bg-white rounded-lg shadow-lg py-1 z-50"
-              style={{
-                top: activeMessageAction.position.y,
-                left: activeMessageAction.position.x,
-              }}
-            >
-              {messages.find(m => m.id === activeMessageAction.messageId)?.sender === 'user' && (
-                <button
-                  onClick={() => {
-                    deleteMessage(activeMessageAction.messageId);
-                    setActiveMessageAction(null);
-                  }}
-                  className="w-full px-4 py-2 text-left text-red-600 hover:bg-red-50 flex items-center gap-2"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Delete Message
-                </button>
-              )}
-            </div>
-          </>
-        )}
-
-        {showNotes && selectedSession && (
-          <div className="absolute right-0 top-0 h-full w-80 bg-white shadow-lg border-l transform transition-transform">
-            <div className="p-4 border-b flex items-center justify-between">
-              <h3 className="font-medium">Notes</h3>
+          <div className="p-4 border-t">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                placeholder="Type your message..."
+                className="flex-1 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
               <button
-                onClick={() => setShowNotes(false)}
-                className="text-gray-500 hover:text-gray-700"
+                onClick={sendMessage}
+                disabled={!newMessage.trim()}
+                className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <X className="w-5 h-5" />
+                <Send className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-4">
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                onBlur={() => updateNotes(selectedSession, notes)}
-                placeholder="Add notes about this conversation..."
-                className="w-full h-40 p-2 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-gray-500">
+          <div className="text-center">
+            <MessageSquare className="w-12 h-12 mx-auto mb-4" />
+            <p>Select a conversation to start chatting</p>
+          </div>
+        </div>
+      )}
+
+      {activeMessageAction && (
+        <>
+          <div
+            className="fixed inset-0"
+            onClick={() => setActiveMessageAction(null)}
+          />
+          <div
+            className="absolute bg-white rounded-lg shadow-lg py-1 z-50"
+            style={{
+              top: activeMessageAction.position.y,
+              left: activeMessageAction.position.x,
+            }}
+          >
+            {messages.find(m => m.id === activeMessageAction.messageId)?.sender === 'user' && (
+              <button
+                onClick={() => {
+                  deleteMessage(activeMessageAction.messageId);
+                  setActiveMessageAction(null);
+                }}
+                className="w-full px-4 py-2 text-left text-red-600 hover:bg-red-50 flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Message
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {showNotes && selectedSession && (
+        <div className="absolute right-0 top-0 h-full w-80 bg-white shadow-lg border-l transform transition-transform">
+          <div className="p-4 border-b flex items-center justify-between">
+            <h3 className="font-medium">Notes</h3>
+            <button
+              onClick={() => setShowNotes(false)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="p-4">
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              onBlur={() => updateNotes(selectedSession, notes)}
+              placeholder="Add notes about this conversation..."
+              className="w-full h-40 p-2 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
