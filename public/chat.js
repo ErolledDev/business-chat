@@ -8,10 +8,11 @@ class BusinessChatPlugin {
     this.messages = [];
     this.settings = {
       businessName: config.businessName || 'Business Chat',
+      representativeName: config.representativeName || 'Support Agent',
       primaryColor: config.primaryColor || '#2563eb',
       secondaryColor: config.secondaryColor || '#1d4ed8',
-      welcomeMessage: 'Welcome! How can we help you today?',
-      fallbackMessage: "We'll get back to you soon!",
+      welcomeMessage: config.welcomeMessage || 'Welcome! How can we help you today?',
+      fallbackMessage: config.fallbackMessage || "We'll get back to you soon!",
     };
     this.init();
   }
@@ -19,8 +20,8 @@ class BusinessChatPlugin {
   async init() {
     try {
       await this.initSupabase();
-      await this.createChatSession();
       await this.loadSettings();
+      await this.createChatSession();
       this.createWidget();
       this.initRealtime();
     } catch (error) {
@@ -44,6 +45,33 @@ class BusinessChatPlugin {
     this.supabase = supabase.createClient(this.supabaseUrl, this.supabaseKey);
   }
 
+  async loadSettings() {
+    try {
+      const { data, error } = await this.supabase
+        .from('widget_settings')
+        .select('*')
+        .eq('user_id', this.config.uid)
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        this.settings = {
+          ...this.settings,
+          businessName: data.business_name || this.settings.businessName,
+          representativeName: data.representative_name || this.settings.representativeName,
+          primaryColor: data.primary_color || this.settings.primaryColor,
+          secondaryColor: data.secondary_color || this.settings.secondaryColor,
+          welcomeMessage: data.welcome_message || this.settings.welcomeMessage,
+          fallbackMessage: data.fallback_message || this.settings.fallbackMessage,
+        };
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error);
+      // Continue with default settings
+    }
+  }
+
   async createChatSession() {
     const visitorId = localStorage.getItem('visitorId') || crypto.randomUUID();
     localStorage.setItem('visitorId', visitorId);
@@ -60,31 +88,6 @@ class BusinessChatPlugin {
 
     if (error) throw error;
     this.sessionId = data.id;
-  }
-
-  async loadSettings() {
-    try {
-      const { data, error } = await this.supabase
-        .from('widget_settings')
-        .select('*')
-        .eq('user_id', this.config.uid)
-        .single();
-
-      if (error) throw error;
-
-      if (data) {
-        this.settings = {
-          businessName: data.business_name || this.settings.businessName,
-          primaryColor: data.primary_color || this.settings.primaryColor,
-          secondaryColor: data.secondary_color || this.settings.secondaryColor,
-          welcomeMessage: data.welcome_message || this.settings.welcomeMessage,
-          fallbackMessage: data.fallback_message || this.settings.fallbackMessage,
-        };
-      }
-    } catch (error) {
-      console.error('Error loading settings:', error);
-      // Continue with default settings
-    }
   }
 
   initRealtime() {
@@ -269,7 +272,7 @@ class BusinessChatPlugin {
         margin-bottom: 12px;
         max-width: 80%;
         clear: both;
-      }
+       }
 
       .message.user {
         float: right;
@@ -350,6 +353,7 @@ class BusinessChatPlugin {
     chatWindow.innerHTML = `
       <div class="chat-header">
         <h3>${this.settings.businessName}</h3>
+        <p class="text-sm opacity-80">${this.settings.representativeName}</p>
       </div>
       <div class="chat-messages"></div>
       <div class="chat-input">

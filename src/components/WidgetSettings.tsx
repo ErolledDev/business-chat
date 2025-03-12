@@ -39,22 +39,23 @@ export const WidgetSettings: React.FC = () => {
         .eq('user_id', uid)
         .single();
 
-      if (error) throw error;
+      if (error && error.code !== 'PGRST116') throw error;
 
       if (data) {
         const settings = {
-          businessName: data.business_name,
-          representativeName: data.representative_name,
-          primaryColor: data.primary_color,
-          secondaryColor: data.secondary_color,
-          welcomeMessage: data.welcome_message,
-          fallbackMessage: data.fallback_message,
+          businessName: data.business_name || 'My Business',
+          representativeName: data.representative_name || 'Support Agent',
+          primaryColor: data.primary_color || '#2563eb',
+          secondaryColor: data.secondary_color || '#1d4ed8',
+          welcomeMessage: data.welcome_message || "👋 Welcome! How can we help you today?",
+          fallbackMessage: data.fallback_message || "We've received your message and will get back to you soon!",
         };
         setLocalSettings(prev => ({ ...prev, ...settings }));
         updateSettings(settings);
       }
     } catch (error) {
       console.error('Error loading settings:', error);
+      toast.error('Failed to load settings');
     }
   };
 
@@ -188,14 +189,27 @@ export const WidgetSettings: React.FC = () => {
             </div>
 
             {showColorPicker && (
-              <div className="mt-4">
-                <input
-                  type="color"
-                  name="primaryColor"
-                  value={localSettings.primaryColor}
-                  onChange={handleChange}
-                  className="w-full h-12 p-1 rounded-lg"
-                />
+              <div className="mt-4 grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Primary Color</label>
+                  <input
+                    type="color"
+                    name="primaryColor"
+                    value={localSettings.primaryColor}
+                    onChange={handleChange}
+                    className="w-full h-12 p-1 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Secondary Color</label>
+                  <input
+                    type="color"
+                    name="secondaryColor"
+                    value={localSettings.secondaryColor}
+                    onChange={handleChange}
+                    className="w-full h-12 p-1 rounded-lg"
+                  />
+                </div>
               </div>
             )}
           </div>
