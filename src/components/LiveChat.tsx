@@ -9,13 +9,14 @@ interface ChatSession {
   visitor_id: string;
   status: 'active' | 'closed';
   last_message?: string;
+  unread_count?: number;
   created_at: string;
 }
 
 interface ChatMessage {
   id: string;
   content: string;
-  sender: 'user' | 'agent';
+  sender: 'user' | 'agent' | 'bot' | 'ai';
   created_at: string;
 }
 
@@ -69,14 +70,28 @@ export const LiveChat: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data, error } = await supabase
+      const { data: sessionsData, error } = await supabase
         .from('chat_sessions')
-        .select('*')
+        .select(`
+          *,
+          chat_messages (
+            content,
+            created_at
+          )
+        `)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setSessions(data || []);
+
+      // Process sessions to include last message and unread count
+      const processedSessions = sessionsData.map(session => ({
+        ...session,
+        last_message: session.chat_messages?.[session.chat_messages.length - 1]?.content || '',
+        unread_count: session.chat_messages?.filter(msg => !msg.read_at)?.length || 0
+      }));
+
+      setSessions(processedSessions);
     } catch (error) {
       console.error('Error loading sessions:', error);
       toast.error('Failed to load chat sessions');
@@ -108,8 +123,25 @@ export const LiveChat: React.FC = () => {
   };
 
   const handleMessageChange = (payload: any) => {
-    if (payload.new && payload.new.session_id === selectedSession) {
-      loadMessages(selectedSession);
+    if (payload.new) {
+      if (payload.new.session_id === selectedSession) {
+        loadMessages(selectedSession);
+      }
+      // Move session to top if new message
+      setSessions(prev => {
+        const updatedSessions = [...prev];
+        const sessionIndex = updatedSessions.findIndex(s => s.id === payload.new.session_id);
+        if (sessionIndex > -1) {
+          const session = updatedSessions[sessionIndex];
+          updatedSessions.splice(sessionIndex, 1);
+          updatedSessions.unshift({
+            ...session,
+            last_message: payload.new.content,
+            unread_count: (session.unread_count || 0) + 1
+          });
+        }
+        return updatedSessions;
+      });
     }
   };
 
@@ -155,6 +187,8 @@ export const LiveChat: React.FC = () => {
     }
   };
 
+  const isSystemMessage = (sender: string) => ['bot', 'ai', 'agent'].includes(sender);
+
   return (
     <div className="max-w-6xl mx-auto p-6">
       <div className="flex items-center justify-between mb-6">
@@ -197,17 +231,26 @@ export const LiveChat: React.FC = () => {
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <h4 className="font-medium">Visitor {session.visitor_id.slice(0, 8)}</h4>
-                    <p className="text-sm text-gray-500">
-                      {new Date(session.created_at).toLocaleString()}
+                    <p className="text-sm text-gray-500 truncate">
+                      {session.last_message || 'No messages yet'}
                     </p>
                   </div>
-                  <div>
-                    <span className={`inline-block px-2 py-1 rounded-full text-xs ${
-                      session.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
+                  <div className="flex flex-col items-end gap-1">
+                    {session.unread_count > 0 && (
+                      <span className="px-2 py-1 text-xs bg-red-500 text-white rounded-full">
+                        {session.unread_count}
+                      </span>
+                    )}
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      session.status === 'active' 
+                        ? session.unread_count > 0 
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-green-100 text-green-700' 
+                        : 'bg-gray-100 text-gray-700'
                     }`}>
-                      {session.status}
+                      {session.unread_count > 0 ? 'New' : session.status}
                     </span>
                   </div>
                 </div>
@@ -236,11 +279,15 @@ export const LiveChat: React.FC = () => {
                 {messages.map((message) => (
                   <div
                     key={message.id}
-                    className={`flex ${message.sender === 'agent' ? 'justify-end' : 'justify-start'}`}
+                    className={`flex ${isSystemMessage(message.sender) ? 'justify-end' : 'justify-start'}`}
                   >
                     <div className={`max-w-[70%] p-3 rounded-lg ${
-                      message.sender === 'agent'
-                        ? 'bg-blue-600 text-white rounded-tr-none'
+                      isSystemMessage(message.sender)
+                        ? message.sender === 'ai'
+                          ? 'bg-purple-600 text-white rounded-tr-none'
+                          : message.sender === 'bot'
+                            ? 'bg-blue-500 text-white rounded-tr-none'
+                            : 'bg-blue-600 text-white rounded-tr-none'
                         : 'bg-gray-100 text-gray-800 rounded-tl-none'
                     }`}>
                       <p>{message.content}</p>
