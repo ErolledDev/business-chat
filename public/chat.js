@@ -1,18 +1,22 @@
 // Business Chat Widget
 class BusinessChatPlugin {
   constructor(config) {
+    if (!config.uid) {
+      throw new Error('User ID (uid) is required');
+    }
+    
     this.config = config;
     this.supabaseUrl = 'https://sxnjvsdpdbnreophnzup.supabase.co';
     this.supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0';
     this.sessionId = null;
     this.messages = [];
     this.settings = {
-      businessName: config.businessName || 'Business Chat',
-      representativeName: config.representativeName || 'Support Agent',
-      primaryColor: config.primaryColor || '#2563eb',
-      secondaryColor: config.secondaryColor || '#1d4ed8',
-      welcomeMessage: config.welcomeMessage || 'Welcome! How can we help you today?',
-      fallbackMessage: config.fallbackMessage || "We'll get back to you soon!",
+      businessName: 'Business Chat',
+      representativeName: 'Support Agent',
+      primaryColor: '#2563eb',
+      secondaryColor: '#1d4ed8',
+      welcomeMessage: 'Welcome! How can we help you today?',
+      fallbackMessage: "We'll get back to you soon!",
     };
     this.init();
   }
@@ -57,7 +61,6 @@ class BusinessChatPlugin {
 
       if (data) {
         this.settings = {
-          ...this.settings,
           businessName: data.business_name || this.settings.businessName,
           representativeName: data.representative_name || this.settings.representativeName,
           primaryColor: data.primary_color || this.settings.primaryColor,
@@ -112,6 +115,33 @@ class BusinessChatPlugin {
         filter: `id=eq.${this.sessionId}`,
       }, this.handleSessionUpdate.bind(this))
       .subscribe();
+
+    // Subscribe to settings changes
+    this.supabase
+      .channel(`widget_settings:${this.config.uid}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'widget_settings',
+        filter: `user_id=eq.${this.config.uid}`,
+      }, this.handleSettingsUpdate.bind(this))
+      .subscribe();
+  }
+
+  handleSettingsUpdate(payload) {
+    const settings = payload.new;
+    if (settings) {
+      this.settings = {
+        businessName: settings.business_name || this.settings.businessName,
+        representativeName: settings.representative_name || this.settings.representativeName,
+        primaryColor: settings.primary_color || this.settings.primaryColor,
+        secondaryColor: settings.secondary_color || this.settings.secondaryColor,
+        welcomeMessage: settings.welcome_message || this.settings.welcomeMessage,
+        fallbackMessage: settings.fallback_message || this.settings.fallbackMessage,
+      };
+      this.updateWidgetStyles();
+      this.updateWidgetContent();
+    }
   }
 
   handleSessionUpdate(payload) {
@@ -199,15 +229,27 @@ class BusinessChatPlugin {
     }
   }
 
-  createWidget() {
-    // Create widget container
-    const container = document.createElement('div');
-    container.id = 'business-chat-widget';
-    document.body.appendChild(container);
+  updateWidgetStyles() {
+    const styleEl = document.getElementById('business-chat-widget-styles');
+    if (styleEl) {
+      styleEl.textContent = this.getStyles();
+    }
+  }
 
-    // Add styles
-    const styles = document.createElement('style');
-    styles.textContent = `
+  updateWidgetContent() {
+    const headerTitle = document.querySelector('#business-chat-widget .chat-header h3');
+    const headerSubtitle = document.querySelector('#business-chat-widget .chat-header p');
+    
+    if (headerTitle) {
+      headerTitle.textContent = this.settings.businessName;
+    }
+    if (headerSubtitle) {
+      headerSubtitle.textContent = this.settings.representativeName;
+    }
+  }
+
+  getStyles() {
+    return `
       #business-chat-widget {
         position: fixed;
         bottom: 20px;
@@ -272,7 +314,7 @@ class BusinessChatPlugin {
         margin-bottom: 12px;
         max-width: 80%;
         clear: both;
-       }
+      }
 
       .message.user {
         float: right;
@@ -335,6 +377,18 @@ class BusinessChatPlugin {
         background: ${this.settings.secondaryColor};
       }
     `;
+  }
+
+  createWidget() {
+    // Create widget container
+    const container = document.createElement('div');
+    container.id = 'business-chat-widget';
+    document.body.appendChild(container);
+
+    // Add styles
+    const styles = document.createElement('style');
+    styles.id = 'business-chat-widget-styles';
+    styles.textContent = this.getStyles();
     document.head.appendChild(styles);
 
     // Create widget button

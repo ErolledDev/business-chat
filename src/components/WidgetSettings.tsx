@@ -68,17 +68,38 @@ export const WidgetSettings: React.FC = () => {
     try {
       setSaving(true);
       
-      const { error } = await supabase
+      // First try to get existing settings
+      const { data: existingSettings } = await supabase
         .from('widget_settings')
-        .upsert({
-          user_id: userId,
-          business_name: localSettings.businessName,
-          representative_name: localSettings.representativeName,
-          primary_color: localSettings.primaryColor,
-          secondary_color: localSettings.secondaryColor,
-          welcome_message: localSettings.welcomeMessage,
-          fallback_message: localSettings.fallbackMessage,
-        });
+        .select('id')
+        .eq('user_id', userId)
+        .single();
+
+      const settingsData = {
+        user_id: userId,
+        business_name: localSettings.businessName,
+        representative_name: localSettings.representativeName,
+        primary_color: localSettings.primaryColor,
+        secondary_color: localSettings.secondaryColor,
+        welcome_message: localSettings.welcomeMessage,
+        fallback_message: localSettings.fallbackMessage,
+      };
+
+      let error;
+      if (existingSettings?.id) {
+        // Update existing settings
+        const result = await supabase
+          .from('widget_settings')
+          .update(settingsData)
+          .eq('id', existingSettings.id);
+        error = result.error;
+      } else {
+        // Insert new settings
+        const result = await supabase
+          .from('widget_settings')
+          .insert([settingsData]);
+        error = result.error;
+      }
 
       if (error) throw error;
 
@@ -103,10 +124,7 @@ export const WidgetSettings: React.FC = () => {
   const installationCode = `<script src="https://business-chat-ai.netlify.app/chat.js"></script>
 <script>
   new BusinessChatPlugin({
-    uid: "${userId}",
-    businessName: "${localSettings.businessName}",
-    primaryColor: "${localSettings.primaryColor}",
-    secondaryColor: "${localSettings.secondaryColor}"
+    uid: "${userId}"
   });
 </script>`;
 
