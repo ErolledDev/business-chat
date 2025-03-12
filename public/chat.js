@@ -24,6 +24,7 @@ class BusinessChatPlugin {
     };
     this.autoRules = [];
     this.advancedRules = [];
+    this.isTyping = false;
     this.init();
   }
 
@@ -174,7 +175,9 @@ class BusinessChatPlugin {
 
       // Add welcome message after session creation
       if (this.settings.welcomeMessage) {
+        await this.showTypingIndicator();
         await this.sendMessage(this.settings.welcomeMessage, 'bot');
+        this.hideTypingIndicator();
       }
 
       // Load existing messages for this session
@@ -234,7 +237,8 @@ class BusinessChatPlugin {
 
   handleNewMessage(payload) {
     const message = payload.new;
-    if (message) {
+    if (message && message.sender !== 'user') {
+      this.hideTypingIndicator();
       this.messages.push(message);
       this.renderMessage(message);
     }
@@ -264,11 +268,41 @@ class BusinessChatPlugin {
     }
   }
 
+  showTypingIndicator() {
+    if (this.isTyping) return;
+    this.isTyping = true;
+
+    const messagesContainer = document.querySelector('.chat-messages');
+    if (!messagesContainer) return;
+
+    const typingIndicator = document.createElement('div');
+    typingIndicator.className = 'typing-indicator';
+    typingIndicator.innerHTML = `
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+    `;
+    messagesContainer.appendChild(typingIndicator);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  hideTypingIndicator() {
+    this.isTyping = false;
+    const typingIndicator = document.querySelector('.typing-indicator');
+    if (typingIndicator) {
+      typingIndicator.remove();
+    }
+  }
+
   async processAutoReply(content) {
     // Check auto reply rules
     for (const rule of this.autoRules) {
       if (this.matchesRule(content, rule)) {
-        await this.sendMessage(rule.response, 'bot');
+        await this.showTypingIndicator();
+        setTimeout(async () => {
+          await this.sendMessage(rule.response, 'bot');
+          this.hideTypingIndicator();
+        }, 1000);
         return true;
       }
     }
@@ -276,7 +310,11 @@ class BusinessChatPlugin {
     // Check advanced reply rules
     for (const rule of this.advancedRules) {
       if (this.matchesRule(content, rule)) {
-        await this.sendMessage(rule.response, 'bot', rule.is_html);
+        await this.showTypingIndicator();
+        setTimeout(async () => {
+          await this.sendMessage(rule.response, 'bot', rule.is_html);
+          this.hideTypingIndicator();
+        }, 1000);
         return true;
       }
     }
@@ -330,38 +368,65 @@ class BusinessChatPlugin {
     try {
       // If it's a user message, process it through rules first
       if (sender === 'user') {
-        const messageHandled = await this.processAutoReply(content);
-        
-        // If no rule matched and AI is enabled, we could process with AI here
-        if (!messageHandled && !this.settings.isLive) {
-          await this.sendMessage(this.settings.fallbackMessage, 'bot');
-        }
-      }
-
-      const { data, error } = await this.supabase
-        .from('chat_messages')
-        .insert({
-          session_id: this.sessionId,
-          content,
-          sender,
-          is_html: isHtml,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error sending message:', error);
-        // If the message fails to send, show it locally anyway
-        this.renderMessage({
+        // First, add the user's message to the UI immediately
+        const userMessage = {
           content,
           sender,
           is_html: isHtml,
           created_at: new Date().toISOString()
-        });
-        return;
-      }
+        };
+        this.messages.push(userMessage);
+        this.renderMessage(userMessage);
 
-      return data;
+        // Then save it to the database
+        const { error: saveError } = await this.supabase
+          .from('chat_messages')
+          .insert({
+            session_id: this.sessionId,
+            content,
+            sender,
+            is_html: isHtml,
+          });
+
+        if (saveError) {
+          console.error('Error saving user message:', saveError);
+          return;
+        }
+
+        // Process the message through rules
+        const messageHandled = await this.processAutoReply(content);
+        
+        // If no rule matched and AI is enabled, we could process with AI here
+        if (!messageHandled && !this.settings.isLive) {
+          await this.showTypingIndicator();
+          setTimeout(async () => {
+            await this.sendMessage(this.settings.fallbackMessage, 'bot');
+            this.hideTypingIndicator();
+          }, 1000);
+        }
+      } else {
+        // For non-user messages (bot, AI, agent)
+        const { error } = await this.supabase
+          .from('chat_messages')
+          .insert({
+            session_id: this.sessionId,
+            content,
+            sender,
+            is_html: isHtml,
+          });
+
+        if (error) {
+          console.error('Error sending message:', error);
+          // If the message fails to send, show it locally anyway
+          this.renderMessage({
+            content,
+            sender,
+            is_html: isHtml,
+            created_at: new Date().toISOString()
+          });
+          return;
+        }
+      }
     } catch (error) {
       console.error('Error sending message:', error);
     }
