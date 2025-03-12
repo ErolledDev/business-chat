@@ -25,6 +25,7 @@ class BusinessChatPlugin {
     this.autoRules = [];
     this.advancedRules = [];
     this.isTyping = false;
+    this.typingTimeout = null;
     this.init();
   }
 
@@ -38,13 +39,11 @@ class BusinessChatPlugin {
       this.initRealtime();
     } catch (error) {
       console.error('Initialization error:', error);
-      // Create widget with default settings if there's an error
       this.createWidget();
     }
   }
 
   async initSupabase() {
-    // Load Supabase library
     const script = document.createElement('script');
     script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
     script.async = true;
@@ -53,7 +52,6 @@ class BusinessChatPlugin {
       document.head.appendChild(script);
     });
 
-    // Initialize Supabase client
     this.supabase = supabase.createClient(this.supabaseUrl, this.supabaseKey);
   }
 
@@ -65,10 +63,8 @@ class BusinessChatPlugin {
         .eq('user_id', this.config.uid)
         .single();
 
-      if (error) {
-        if (error.code !== 'PGRST116') {
-          console.error('Error loading settings:', error);
-        }
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error loading settings:', error);
         return;
       }
 
@@ -86,12 +82,10 @@ class BusinessChatPlugin {
           isLive: false
         };
 
-        // Update widget if it exists
         this.updateWidgetStyles();
         this.updateWidgetContent();
       }
 
-      // Subscribe to settings changes
       this.supabase
         .channel(`widget_settings:${this.config.uid}`)
         .on('postgres_changes', {
@@ -127,24 +121,23 @@ class BusinessChatPlugin {
 
   async loadRules() {
     try {
-      // Load auto reply rules
-      const { data: autoRules, error: autoError } = await this.supabase
-        .from('auto_reply_rules')
-        .select('*')
-        .eq('user_id', this.config.uid);
+      const [autoRules, advancedRules] = await Promise.all([
+        this.supabase
+          .from('auto_reply_rules')
+          .select('*')
+          .eq('user_id', this.config.uid),
+        this.supabase
+          .from('advanced_reply_rules')
+          .select('*')
+          .eq('user_id', this.config.uid)
+      ]);
 
-      if (!autoError) {
-        this.autoRules = autoRules || [];
+      if (!autoRules.error) {
+        this.autoRules = autoRules.data || [];
       }
 
-      // Load advanced reply rules
-      const { data: advancedRules, error: advError } = await this.supabase
-        .from('advanced_reply_rules')
-        .select('*')
-        .eq('user_id', this.config.uid);
-
-      if (!advError) {
-        this.advancedRules = advancedRules || [];
+      if (!advancedRules.error) {
+        this.advancedRules = advancedRules.data || [];
       }
     } catch (error) {
       console.error('Error loading rules:', error);
@@ -173,14 +166,14 @@ class BusinessChatPlugin {
 
       this.sessionId = data.id;
 
-      // Add welcome message after session creation
       if (this.settings.welcomeMessage) {
         await this.showTypingIndicator();
-        await this.sendMessage(this.settings.welcomeMessage, 'bot');
-        this.hideTypingIndicator();
+        setTimeout(async () => {
+          await this.sendMessage(this.settings.welcomeMessage, 'bot');
+          this.hideTypingIndicator();
+        }, 1000);
       }
 
-      // Load existing messages for this session
       await this.loadMessages();
     } catch (error) {
       console.error('Error creating chat session:', error);
@@ -212,7 +205,6 @@ class BusinessChatPlugin {
   initRealtime() {
     if (!this.sessionId) return;
 
-    // Subscribe to new messages
     this.supabase
       .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
@@ -223,7 +215,6 @@ class BusinessChatPlugin {
       }, this.handleNewMessage.bind(this))
       .subscribe();
 
-    // Subscribe to session status changes
     this.supabase
       .channel(`chat_sessions:${this.sessionId}`)
       .on('postgres_changes', {
@@ -295,28 +286,44 @@ class BusinessChatPlugin {
   }
 
   async processAutoReply(content) {
-    // Check auto reply rules
-    for (const rule of this.autoRules) {
-      if (this.matchesRule(content, rule)) {
-        await this.showTypingIndicator();
-        setTimeout(async () => {
-          await this.sendMessage(rule.response, 'bot');
-          this.hideTypingIndicator();
-        }, 1000);
-        return true;
-      }
-    }
-
-    // Check advanced reply rules
+    // First check advanced rules (they take precedence)
     for (const rule of this.advancedRules) {
       if (this.matchesRule(content, rule)) {
         await this.showTypingIndicator();
-        setTimeout(async () => {
-          await this.sendMessage(rule.response, 'bot', rule.is_html);
-          this.hideTypingIndicator();
-        }, 1000);
-        return true;
+        return new Promise(resolve => {
+          setTimeout(async () => {
+            await this.sendMessage(rule.response, 'bot', rule.is_html);
+            this.hideTypingIndicator();
+            resolve(true);
+          }, 1500);
+        });
       }
+    }
+
+    // Then check auto reply rules
+    for (const rule of this.autoRules) {
+      if (this.matchesRule(content, rule)) {
+        await this.showTypingIndicator();
+        return new Promise(resolve => {
+          setTimeout(async () => {
+            await this.sendMessage(rule.response, 'bot');
+            this.hideTypingIndicator();
+            resolve(true);
+          }, 1500);
+        });
+      }
+    }
+
+    // If AI is enabled and no rules matched
+    if (this.settings.aiEnabled && this.settings.aiModel) {
+      await this.showTypingIndicator();
+      return new Promise(resolve => {
+        setTimeout(async () => {
+          await this.sendMessage("AI is processing your request...", 'ai');
+          this.hideTypingIndicator();
+          resolve(true);
+        }, 1500);
+      });
     }
 
     return false;
@@ -347,7 +354,6 @@ class BusinessChatPlugin {
         });
       
       case 'synonym':
-        // Basic synonym matching - could be enhanced with a proper synonym database
         return rule.keywords.some(keyword =>
           userContent.split(/\s+/).some(word => 
             word === keyword.toLowerCase()
@@ -366,9 +372,8 @@ class BusinessChatPlugin {
     }
 
     try {
-      // If it's a user message, process it through rules first
       if (sender === 'user') {
-        // First, add the user's message to the UI immediately
+        // Immediately render user message
         const userMessage = {
           content,
           sender,
@@ -378,7 +383,7 @@ class BusinessChatPlugin {
         this.messages.push(userMessage);
         this.renderMessage(userMessage);
 
-        // Then save it to the database
+        // Save to database
         const { error: saveError } = await this.supabase
           .from('chat_messages')
           .insert({
@@ -396,16 +401,15 @@ class BusinessChatPlugin {
         // Process the message through rules
         const messageHandled = await this.processAutoReply(content);
         
-        // If no rule matched and AI is enabled, we could process with AI here
+        // If no rule matched and not in live chat
         if (!messageHandled && !this.settings.isLive) {
           await this.showTypingIndicator();
           setTimeout(async () => {
             await this.sendMessage(this.settings.fallbackMessage, 'bot');
             this.hideTypingIndicator();
-          }, 1000);
+          }, 1500);
         }
       } else {
-        // For non-user messages (bot, AI, agent)
         const { error } = await this.supabase
           .from('chat_messages')
           .insert({
@@ -417,7 +421,6 @@ class BusinessChatPlugin {
 
         if (error) {
           console.error('Error sending message:', error);
-          // If the message fails to send, show it locally anyway
           this.renderMessage({
             content,
             sender,
@@ -563,8 +566,34 @@ class BusinessChatPlugin {
         gap: 12px;
       }
 
-      .message {
+      .message-group {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
         max-width: 85%;
+      }
+
+      .message-group.user {
+        align-self: flex-end;
+      }
+
+      .message-group.bot,
+      .message-group.ai,
+      .message-group.agent {
+        align-self: flex-start;
+      }
+
+      .message-time {
+        font-size: 0.75em;
+        color: #64748b;
+        margin: 0 8px;
+      }
+
+      .message-group.user .message-time {
+        text-align: right;
+      }
+
+      .message {
         word-wrap: break-word;
         padding: 12px 16px;
         border-radius: 16px;
@@ -574,19 +603,29 @@ class BusinessChatPlugin {
       }
 
       .message.user {
-        align-self: flex-end;
         background: ${this.settings.primaryColor};
         color: white;
         border-radius: 16px 16px 4px 16px;
-        margin-left: 20%;
       }
 
       .message.bot {
-        align-self: flex-start;
         background: white;
         color: #1f2937;
         border-radius: 16px 16px 16px 4px;
-        margin-right: 20%;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      .message.ai {
+        background: #f3e8ff;
+        color: #6b21a8;
+        border-radius: 16px 16px 16px 4px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      .message.agent {
+        background: #e0f2fe;
+        color: #075985;
+        border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
 
@@ -601,11 +640,31 @@ class BusinessChatPlugin {
         text-align: center;
       }
 
-      .message-time {
-        font-size: 0.75em;
-        opacity: 0.8;
-        margin-top: 4px;
-        text-align: right;
+      .typing-indicator {
+        align-self: flex-start;
+        display: flex;
+        gap: 4px;
+        padding: 12px 16px;
+        background: white;
+        border-radius: 16px;
+        margin: 4px 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      .typing-dot {
+        width: 6px;
+        height: 6px;
+        background: #94a3b8;
+        border-radius: 50%;
+        animation: typing 1s infinite;
+      }
+
+      .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+      .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+      @keyframes typing {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-4px); }
       }
 
       .chat-input {
@@ -655,33 +714,6 @@ class BusinessChatPlugin {
         height: 20px;
       }
 
-      .typing-indicator {
-        align-self: flex-start;
-        display: flex;
-        gap: 4px;
-        padding: 12px 16px;
-        background: white;
-        border-radius: 16px;
-        margin-bottom: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-      }
-
-      .typing-dot {
-        width: 6px;
-        height: 6px;
-        background: #94a3b8;
-        border-radius: 50%;
-        animation: typing 1s infinite;
-      }
-
-      .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-      .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-
-      @keyframes typing {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-4px); }
-      }
-
       /* Scrollbar Styling */
       .chat-messages::-webkit-scrollbar {
         width: 6px;
@@ -703,18 +735,15 @@ class BusinessChatPlugin {
   }
 
   createWidget() {
-    // Create widget container
     const container = document.createElement('div');
     container.id = 'business-chat-widget';
     document.body.appendChild(container);
 
-    // Add styles
     const styles = document.createElement('style');
     styles.id = 'business-chat-widget-styles';
     styles.textContent = this.getStyles();
     document.head.appendChild(styles);
 
-    // Create widget button
     const button = document.createElement('div');
     button.className = 'chat-button';
     button.innerHTML = `
@@ -724,7 +753,6 @@ class BusinessChatPlugin {
     `;
     container.appendChild(button);
 
-    // Create chat window
     const chatWindow = document.createElement('div');
     chatWindow.className = 'chat-window';
     chatWindow.innerHTML = `
@@ -748,7 +776,6 @@ class BusinessChatPlugin {
     `;
     container.appendChild(chatWindow);
 
-    // Add event listeners
     button.addEventListener('click', () => {
       chatWindow.classList.toggle('open');
       if (chatWindow.classList.contains('open')) {
@@ -779,24 +806,39 @@ class BusinessChatPlugin {
     const messagesContainer = document.querySelector('.chat-messages');
     if (!messagesContainer) return;
 
+    const time = new Date(message.created_at).toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+
+    // Create or find message group
+    let messageGroup = messagesContainer.lastElementChild;
+    if (!messageGroup || 
+        !messageGroup.classList.contains('message-group') || 
+        !messageGroup.classList.contains(message.sender)) {
+      messageGroup = document.createElement('div');
+      messageGroup.className = `message-group ${message.sender}`;
+      messagesContainer.appendChild(messageGroup);
+    }
+
+    // Create message element
     const messageEl = document.createElement('div');
     messageEl.className = `message ${message.sender}`;
     
-    const messageContent = document.createElement('div');
     if (message.is_html) {
-      messageContent.innerHTML = message.content;
+      messageEl.innerHTML = message.content;
     } else {
-      messageContent.textContent = message.content;
+      messageEl.textContent = message.content;
     }
-    messageEl.appendChild(messageContent);
 
     // Add timestamp
     const timeEl = document.createElement('div');
     timeEl.className = 'message-time';
-    timeEl.textContent = new Date(message.created_at).toLocaleTimeString();
-    messageEl.appendChild(timeEl);
+    timeEl.textContent = time;
+
+    messageGroup.appendChild(messageEl);
+    messageGroup.appendChild(timeEl);
     
-    messagesContainer.appendChild(messageEl);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
