@@ -317,9 +317,11 @@ class BusinessChatPlugin {
   }
 
   async processAutoReply(content) {
+    const userContent = content.toLowerCase();
+
     // First check advanced rules (they take precedence)
     for (const rule of this.advancedRules) {
-      if (this.matchesRule(content, rule)) {
+      if (this.matchesRule(userContent, rule)) {
         await this.showTypingIndicator();
         return new Promise(resolve => {
           setTimeout(async () => {
@@ -333,7 +335,7 @@ class BusinessChatPlugin {
 
     // Then check auto reply rules
     for (const rule of this.autoRules) {
-      if (this.matchesRule(content, rule)) {
+      if (this.matchesRule(userContent, rule)) {
         await this.showTypingIndicator();
         return new Promise(resolve => {
           setTimeout(async () => {
@@ -369,7 +371,15 @@ class BusinessChatPlugin {
       });
     }
 
-    return false;
+    // If no rules matched and not in live mode, show fallback message
+    await this.showTypingIndicator();
+    return new Promise(resolve => {
+      setTimeout(async () => {
+        await this.sendMessage(this.settings.fallbackMessage, 'bot');
+        this.hideTypingIndicator();
+        resolve(true);
+      }, 1500);
+    });
   }
 
   matchesRule(content, rule) {
@@ -392,15 +402,15 @@ class BusinessChatPlugin {
             const regex = new RegExp(keyword, 'i');
             return regex.test(content);
           } catch (e) {
+            console.error('Invalid regex pattern:', keyword);
             return false;
           }
         });
       
       case 'synonym':
-        return rule.keywords.some(keyword =>
-          userContent.split(/\s+/).some(word => 
-            word === keyword.toLowerCase()
-          )
+        const words = userContent.split(/\s+/);
+        return rule.keywords.some(keyword => 
+          words.includes(keyword.toLowerCase())
         );
       
       default:
@@ -442,16 +452,7 @@ class BusinessChatPlugin {
         }
 
         // Process the message through rules
-        const messageHandled = await this.processAutoReply(content);
-        
-        // If no rule matched and not in live chat
-        if (!messageHandled && !this.settings.isLive) {
-          await this.showTypingIndicator();
-          setTimeout(async () => {
-            await this.sendMessage(this.settings.fallbackMessage, 'bot');
-            this.hideTypingIndicator();
-          }, 1500);
-        }
+        await this.processAutoReply(content);
       } else {
         const { error } = await this.supabase
           .from('chat_messages')
