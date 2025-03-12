@@ -1,15 +1,68 @@
 import React from 'react';
 import { Bot } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { toast } from 'react-hot-toast';
 
 export const AiMode: React.FC = () => {
   const [aiEnabled, setAiEnabled] = React.useState(false);
   const [aiModel, setAiModel] = React.useState('gpt-3.5-turbo');
   const [apiKey, setApiKey] = React.useState('');
   const [context, setContext] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
 
-  const handleSave = () => {
-    // TODO: Save AI settings to Supabase
-    console.log('Saving AI settings...');
+  React.useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('widget_settings')
+        .select('ai_enabled, ai_model, ai_api_key, ai_context')
+        .eq('user_id', user.id)
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        setAiEnabled(data.ai_enabled || false);
+        setAiModel(data.ai_model || 'gpt-3.5-turbo');
+        setApiKey(data.ai_api_key || '');
+        setContext(data.ai_context || '');
+      }
+    } catch (error) {
+      console.error('Error loading AI settings:', error);
+      toast.error('Failed to load AI settings');
+    }
+  };
+
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('No user found');
+
+      const { error } = await supabase
+        .from('widget_settings')
+        .upsert({
+          user_id: user.id,
+          ai_enabled: aiEnabled,
+          ai_model: aiModel,
+          ai_api_key: apiKey,
+          ai_context: context,
+        });
+
+      if (error) throw error;
+      toast.success('AI settings saved successfully!');
+    } catch (error) {
+      console.error('Error saving AI settings:', error);
+      toast.error('Failed to save AI settings');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -83,10 +136,17 @@ export const AiMode: React.FC = () => {
 
         <button
           onClick={handleSave}
-          disabled={!aiEnabled}
-          className="w-full py-2 px-4 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          disabled={!aiEnabled || saving}
+          className="w-full py-2 px-4 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
-          Save AI Settings
+          {saving ? (
+            <>
+              <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+              Saving...
+            </>
+          ) : (
+            'Save AI Settings'
+          )}
         </button>
       </div>
     </div>

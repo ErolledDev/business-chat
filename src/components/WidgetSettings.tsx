@@ -2,6 +2,7 @@ import React from 'react';
 import { useChatStore } from '../store/chatStore';
 import { Palette, Code, Copy, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { toast } from 'react-hot-toast';
 
 const colorSchemes = [
   { name: 'Ocean Blue', primary: '#2563eb', secondary: '#1d4ed8' },
@@ -16,6 +17,7 @@ export const WidgetSettings: React.FC = () => {
   const [localSettings, setLocalSettings] = React.useState(settings);
   const [copied, setCopied] = React.useState(false);
   const [showColorPicker, setShowColorPicker] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
   const [userId, setUserId] = React.useState<string>('');
 
   React.useEffect(() => {
@@ -23,10 +25,38 @@ export const WidgetSettings: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
+        loadSettings(user.id);
       }
     };
     getUser();
   }, []);
+
+  const loadSettings = async (uid: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('widget_settings')
+        .select('*')
+        .eq('user_id', uid)
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        const settings = {
+          businessName: data.business_name,
+          representativeName: data.representative_name,
+          primaryColor: data.primary_color,
+          secondaryColor: data.secondary_color,
+          welcomeMessage: data.welcome_message,
+          fallbackMessage: data.fallback_message,
+        };
+        setLocalSettings(prev => ({ ...prev, ...settings }));
+        updateSettings(settings);
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -34,23 +64,30 @@ export const WidgetSettings: React.FC = () => {
   };
 
   const handleSave = async () => {
-    updateSettings(localSettings);
-    
-    // Save settings to Supabase
-    const { error } = await supabase
-      .from('widget_settings')
-      .upsert({
-        user_id: userId,
-        business_name: localSettings.businessName,
-        representative_name: localSettings.representativeName,
-        primary_color: localSettings.primaryColor,
-        secondary_color: localSettings.secondaryColor,
-        welcome_message: localSettings.welcomeMessage,
-        fallback_message: localSettings.fallbackMessage,
-      });
+    try {
+      setSaving(true);
+      
+      const { error } = await supabase
+        .from('widget_settings')
+        .upsert({
+          user_id: userId,
+          business_name: localSettings.businessName,
+          representative_name: localSettings.representativeName,
+          primary_color: localSettings.primaryColor,
+          secondary_color: localSettings.secondaryColor,
+          welcome_message: localSettings.welcomeMessage,
+          fallback_message: localSettings.fallbackMessage,
+        });
 
-    if (error) {
+      if (error) throw error;
+
+      updateSettings(localSettings);
+      toast.success('Settings saved successfully!');
+    } catch (error) {
       console.error('Error saving settings:', error);
+      toast.error('Failed to save settings');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -75,6 +112,7 @@ export const WidgetSettings: React.FC = () => {
   const copyInstallationCode = async () => {
     await navigator.clipboard.writeText(installationCode);
     setCopied(true);
+    toast.success('Code copied to clipboard!');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -214,9 +252,17 @@ export const WidgetSettings: React.FC = () => {
 
           <button
             onClick={handleSave}
-            className="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            disabled={saving}
+            className="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-blue-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            Save Settings
+            {saving ? (
+              <>
+                <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                Saving...
+              </>
+            ) : (
+              'Save Settings'
+            )}
           </button>
         </div>
       </div>

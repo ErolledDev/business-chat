@@ -1,6 +1,8 @@
 import React from 'react';
 import { Plus, Download, Upload, Trash2, Code } from 'lucide-react';
 import Papa from 'papaparse';
+import { supabase } from '../lib/supabase';
+import { toast } from 'react-hot-toast';
 
 interface Rule {
   id: string;
@@ -12,7 +14,74 @@ interface Rule {
 
 export const AdvancedReply: React.FC = () => {
   const [rules, setRules] = React.useState<Rule[]>([]);
+  const [saving, setSaving] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    loadRules();
+  }, []);
+
+  const loadRules = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('advanced_reply_rules')
+        .select('*')
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      if (data) {
+        setRules(data.map(rule => ({
+          id: rule.id,
+          keywords: rule.keywords,
+          matchType: rule.match_type,
+          response: rule.response,
+          isHtml: rule.is_html,
+        })));
+      }
+    } catch (error) {
+      console.error('Error loading rules:', error);
+      toast.error('Failed to load advanced reply rules');
+    }
+  };
+
+  const saveRules = async () => {
+    try {
+      setSaving(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('No user found');
+
+      // First, delete all existing rules
+      await supabase
+        .from('advanced_reply_rules')
+        .delete()
+        .eq('user_id', user.id);
+
+      // Then insert new rules
+      const { error } = await supabase
+        .from('advanced_reply_rules')
+        .insert(
+          rules.map(rule => ({
+            user_id: user.id,
+            keywords: rule.keywords,
+            match_type: rule.matchType,
+            response: rule.response,
+            is_html: rule.isHtml,
+          }))
+        );
+
+      if (error) throw error;
+      toast.success('Rules saved successfully!');
+    } catch (error) {
+      console.error('Error saving rules:', error);
+      toast.error('Failed to save rules');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const addRule = () => {
     const newRule: Rule = {
@@ -55,6 +124,7 @@ export const AdvancedReply: React.FC = () => {
     a.download = 'advanced-reply-rules.csv';
     a.click();
     URL.revokeObjectURL(url);
+    toast.success('Rules exported successfully!');
   };
 
   const importRules = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -73,6 +143,7 @@ export const AdvancedReply: React.FC = () => {
             isHtml: row.isHtml === 'true',
           }));
         setRules([...rules, ...importedRules]);
+        toast.success('Rules imported successfully!');
       },
       header: true,
     });
@@ -110,6 +181,20 @@ export const AdvancedReply: React.FC = () => {
           >
             <Plus className="w-4 h-4" />
             Add Rule
+          </button>
+          <button
+            onClick={saveRules}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-purple-400"
+          >
+            {saving ? (
+              <>
+                <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                Saving...
+              </>
+            ) : (
+              'Save All Rules'
+            )}
           </button>
         </div>
       </div>
