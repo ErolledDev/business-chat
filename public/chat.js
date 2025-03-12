@@ -47,20 +47,6 @@ class BusinessChatPlugin {
 
     // Initialize Supabase client
     this.supabase = supabase.createClient(this.supabaseUrl, this.supabaseKey);
-
-    // Set up anonymous session
-    const { data: { session }, error: authError } = await this.supabase.auth.signUp({
-      email: `visitor-${crypto.randomUUID()}@anonymous.chat`,
-      password: crypto.randomUUID(),
-    });
-
-    if (authError) {
-      console.error('Auth error:', authError);
-      throw authError;
-    }
-
-    // Store the session
-    this.session = session;
   }
 
   async loadSettings() {
@@ -71,7 +57,12 @@ class BusinessChatPlugin {
         .eq('user_id', this.config.uid)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error;
+      if (error) {
+        if (error.code !== 'PGRST116') {
+          console.error('Error loading settings:', error);
+        }
+        return;
+      }
 
       if (data) {
         this.settings = {
@@ -129,13 +120,16 @@ class BusinessChatPlugin {
         .insert({
           user_id: this.config.uid,
           visitor_id: visitorId,
-          status: 'active',
-          visitor_auth_id: this.session?.user?.id
+          status: 'active'
         })
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error creating chat session:', error);
+        return;
+      }
+
       this.sessionId = data.id;
 
       // Add welcome message after session creation
@@ -148,6 +142,8 @@ class BusinessChatPlugin {
   }
 
   initRealtime() {
+    if (!this.sessionId) return;
+
     // Subscribe to new messages
     this.supabase
       .channel(`chat_messages:${this.sessionId}`)
@@ -200,6 +196,11 @@ class BusinessChatPlugin {
   }
 
   async sendMessage(content, sender, isHtml = false) {
+    if (!this.sessionId) {
+      console.error('No active chat session');
+      return;
+    }
+
     try {
       const { data, error } = await this.supabase
         .from('chat_messages')
@@ -212,7 +213,18 @@ class BusinessChatPlugin {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error sending message:', error);
+        // If the message fails to send, show it locally anyway
+        this.renderMessage({
+          content,
+          sender,
+          is_html: isHtml,
+          created_at: new Date().toISOString()
+        });
+        return;
+      }
+
       return data;
     } catch (error) {
       console.error('Error sending message:', error);
