@@ -68,7 +68,37 @@ class BusinessChatPlugin {
           welcomeMessage: data.welcome_message || this.settings.welcomeMessage,
           fallbackMessage: data.fallback_message || this.settings.fallbackMessage,
         };
+
+        // Update widget if it exists
+        this.updateWidgetStyles();
+        this.updateWidgetContent();
       }
+
+      // Subscribe to settings changes
+      this.supabase
+        .channel(`widget_settings:${this.config.uid}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'widget_settings',
+          filter: `user_id=eq.${this.config.uid}`,
+        }, (payload) => {
+          const newData = payload.new;
+          if (newData) {
+            this.settings = {
+              businessName: newData.business_name || this.settings.businessName,
+              representativeName: newData.representative_name || this.settings.representativeName,
+              primaryColor: newData.primary_color || this.settings.primaryColor,
+              secondaryColor: newData.secondary_color || this.settings.secondaryColor,
+              welcomeMessage: newData.welcome_message || this.settings.welcomeMessage,
+              fallbackMessage: newData.fallback_message || this.settings.fallbackMessage,
+            };
+            this.updateWidgetStyles();
+            this.updateWidgetContent();
+          }
+        })
+        .subscribe();
+
     } catch (error) {
       console.error('Error loading settings:', error);
       // Continue with default settings
@@ -91,6 +121,11 @@ class BusinessChatPlugin {
 
     if (error) throw error;
     this.sessionId = data.id;
+
+    // Add welcome message after session creation
+    if (this.settings.welcomeMessage) {
+      await this.sendMessage(this.settings.welcomeMessage, 'bot');
+    }
   }
 
   initRealtime() {
@@ -115,32 +150,13 @@ class BusinessChatPlugin {
         filter: `id=eq.${this.sessionId}`,
       }, this.handleSessionUpdate.bind(this))
       .subscribe();
-
-    // Subscribe to settings changes
-    this.supabase
-      .channel(`widget_settings:${this.config.uid}`)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'widget_settings',
-        filter: `user_id=eq.${this.config.uid}`,
-      }, this.handleSettingsUpdate.bind(this))
-      .subscribe();
   }
 
-  handleSettingsUpdate(payload) {
-    const settings = payload.new;
-    if (settings) {
-      this.settings = {
-        businessName: settings.business_name || this.settings.businessName,
-        representativeName: settings.representative_name || this.settings.representativeName,
-        primaryColor: settings.primary_color || this.settings.primaryColor,
-        secondaryColor: settings.secondary_color || this.settings.secondaryColor,
-        welcomeMessage: settings.welcome_message || this.settings.welcomeMessage,
-        fallbackMessage: settings.fallback_message || this.settings.fallbackMessage,
-      };
-      this.updateWidgetStyles();
-      this.updateWidgetContent();
+  handleNewMessage(payload) {
+    const message = payload.new;
+    if (message) {
+      this.messages.push(message);
+      this.renderMessage(message);
     }
   }
 
@@ -157,55 +173,10 @@ class BusinessChatPlugin {
     const messageEl = document.createElement('div');
     messageEl.className = 'message system';
     messageEl.textContent = content;
-    document.querySelector('.chat-messages').appendChild(messageEl);
-  }
-
-  async handleNewMessage(payload) {
-    const message = payload.new;
-    this.messages.push(message);
-    this.renderMessage(message);
-
-    if (message.sender === 'user') {
-      // Check auto-reply rules
-      const { data: autoRules } = await this.supabase
-        .from('auto_reply_rules')
-        .select('*')
-        .eq('user_id', this.config.uid);
-
-      const { data: advancedRules } = await this.supabase
-        .from('advanced_reply_rules')
-        .select('*')
-        .eq('user_id', this.config.uid);
-
-      // Check for matches in both rule sets
-      const matchedRule = [...(autoRules || []), ...(advancedRules || [])]
-        .find(rule => this.matchesRule(message.content, rule));
-
-      if (matchedRule) {
-        await this.sendMessage(matchedRule.response, 'bot', matchedRule.is_html);
-      }
-    }
-  }
-
-  matchesRule(content, rule) {
-    const messageText = content.toLowerCase();
-    const keywords = rule.keywords.map(k => k.toLowerCase());
-
-    switch (rule.match_type) {
-      case 'exact':
-        return keywords.some(k => messageText === k);
-      case 'fuzzy':
-        return keywords.some(k => messageText.includes(k));
-      case 'regex':
-        return keywords.some(k => {
-          try {
-            return new RegExp(k, 'i').test(messageText);
-          } catch (e) {
-            return false;
-          }
-        });
-      default:
-        return false;
+    const messagesContainer = document.querySelector('.chat-messages');
+    if (messagesContainer) {
+      messagesContainer.appendChild(messageEl);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
   }
 
@@ -255,6 +226,7 @@ class BusinessChatPlugin {
         bottom: 20px;
         right: 20px;
         z-index: 9999;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       }
 
       .chat-button {
@@ -304,6 +276,18 @@ class BusinessChatPlugin {
         color: white;
       }
 
+      .chat-header h3 {
+        margin: 0;
+        font-size: 1.1em;
+        font-weight: 600;
+      }
+
+      .chat-header p {
+        margin: 4px 0 0;
+        font-size: 0.9em;
+        opacity: 0.9;
+      }
+
       .chat-messages {
         flex: 1;
         overflow-y: auto;
@@ -324,7 +308,7 @@ class BusinessChatPlugin {
         padding: 8px 12px;
       }
 
-      .message.bot, .message.ai {
+      .message.bot {
         float: left;
         background: #f0f0f0;
         color: #333;
@@ -341,14 +325,6 @@ class BusinessChatPlugin {
         font-size: 0.9em;
       }
 
-      .message.agent {
-        float: left;
-        background: ${this.settings.secondaryColor};
-        color: white;
-        border-radius: 12px 12px 12px 0;
-        padding: 8px 12px;
-      }
-
       .chat-input {
         padding: 16px;
         border-top: 1px solid #e5e7eb;
@@ -362,6 +338,12 @@ class BusinessChatPlugin {
         border: 1px solid #e5e7eb;
         border-radius: 6px;
         outline: none;
+        font-size: 14px;
+      }
+
+      .chat-input input:focus {
+        border-color: ${this.settings.primaryColor};
+        box-shadow: 0 0 0 2px ${this.settings.primaryColor}33;
       }
 
       .chat-input button {
@@ -371,10 +353,19 @@ class BusinessChatPlugin {
         border: none;
         border-radius: 6px;
         cursor: pointer;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
 
       .chat-input button:hover {
         background: ${this.settings.secondaryColor};
+      }
+
+      .chat-input button svg {
+        width: 16px;
+        height: 16px;
       }
     `;
   }
@@ -407,12 +398,17 @@ class BusinessChatPlugin {
     chatWindow.innerHTML = `
       <div class="chat-header">
         <h3>${this.settings.businessName}</h3>
-        <p class="text-sm opacity-80">${this.settings.representativeName}</p>
+        <p>${this.settings.representativeName}</p>
       </div>
       <div class="chat-messages"></div>
       <div class="chat-input">
         <input type="text" placeholder="Type your message...">
-        <button>Send</button>
+        <button>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
       </div>
     `;
     container.appendChild(chatWindow);
@@ -420,9 +416,6 @@ class BusinessChatPlugin {
     // Add event listeners
     button.addEventListener('click', () => {
       chatWindow.classList.toggle('open');
-      if (chatWindow.classList.contains('open') && this.messages.length === 0) {
-        this.sendMessage(this.settings.welcomeMessage, 'bot');
-      }
     });
 
     const input = chatWindow.querySelector('input');
@@ -446,6 +439,8 @@ class BusinessChatPlugin {
 
   renderMessage(message) {
     const messagesContainer = document.querySelector('.chat-messages');
+    if (!messagesContainer) return;
+
     const messageEl = document.createElement('div');
     messageEl.className = `message ${message.sender}`;
     
