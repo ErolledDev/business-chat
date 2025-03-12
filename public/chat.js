@@ -26,8 +26,8 @@ class BusinessChatPlugin {
     this.advancedRules = [];
     this.isTyping = false;
     this.typingTimeout = null;
+    this.hasNewMessage = false;
     this.init();
-    
   }
 
   async init() {
@@ -171,12 +171,14 @@ class BusinessChatPlugin {
       // Load existing messages first
       await this.loadMessages();
 
-      // Then show welcome message if no messages exist
-      if (this.messages.length === 0 && this.settings.welcomeMessage) {
-        await this.showTypingIndicator();
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      // Show welcome message immediately if no messages exist
+      if (this.messages.length === 0) {
+        this.showTypingIndicator();
+        await new Promise(resolve => setTimeout(resolve, 500));
         await this.sendMessage(this.settings.welcomeMessage, 'bot');
         this.hideTypingIndicator();
+        this.hasNewMessage = true;
+        this.updateNotificationIndicator();
       }
     } catch (error) {
       console.error('Error creating chat session:', error);
@@ -239,6 +241,10 @@ class BusinessChatPlugin {
       this.hideTypingIndicator();
       this.messages.push(message);
       this.renderMessage(message);
+      if (!document.querySelector('.chat-window').classList.contains('open')) {
+        this.hasNewMessage = true;
+        this.updateNotificationIndicator();
+      }
     }
   }
 
@@ -467,6 +473,15 @@ class BusinessChatPlugin {
     }
   }
 
+  updateNotificationIndicator() {
+    const notificationDot = document.querySelector('.notification-dot');
+    if (this.hasNewMessage) {
+      notificationDot.style.display = 'block';
+    } else {
+      notificationDot.style.display = 'none';
+    }
+  }
+
   getStyles() {
     return `
       #business-chat-widget {
@@ -488,10 +503,40 @@ class BusinessChatPlugin {
         cursor: pointer;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         transition: transform 0.2s;
+        position: relative;
       }
 
       .chat-button:hover {
         transform: scale(1.1);
+      }
+
+      .notification-dot {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 12px;
+        height: 12px;
+        background-color: #ef4444;
+        border-radius: 50%;
+        display: none;
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0% {
+          transform: scale(0.95);
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+        }
+        
+        70% {
+          transform: scale(1);
+          box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+        }
+        
+        100% {
+          transform: scale(0.95);
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+        }
       }
 
       .chat-icon {
@@ -754,6 +799,7 @@ class BusinessChatPlugin {
     const button = document.createElement('div');
     button.className = 'chat-button';
     button.innerHTML = `
+      <div class="notification-dot"></div>
       <svg class="chat-icon" viewBox="0 0 24 24">
         <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
       </svg>
@@ -787,6 +833,8 @@ class BusinessChatPlugin {
       chatWindow.classList.toggle('open');
       if (chatWindow.classList.contains('open')) {
         chatWindow.querySelector('input').focus();
+        this.hasNewMessage = false;
+        this.updateNotificationIndicator();
       }
     });
 
