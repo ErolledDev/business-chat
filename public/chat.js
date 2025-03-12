@@ -17,7 +17,13 @@ class BusinessChatPlugin {
       secondaryColor: '#1d4ed8',
       welcomeMessage: 'Welcome! How can we help you today?',
       fallbackMessage: "We'll get back to you soon!",
+      aiEnabled: false,
+      aiModel: null,
+      aiContext: null,
+      isLive: false
     };
+    this.autoRules = [];
+    this.advancedRules = [];
     this.init();
   }
 
@@ -25,6 +31,7 @@ class BusinessChatPlugin {
     try {
       await this.initSupabase();
       await this.loadSettings();
+      await this.loadRules();
       this.createWidget();
       await this.createChatSession();
       this.initRealtime();
@@ -72,6 +79,10 @@ class BusinessChatPlugin {
           secondaryColor: data.secondary_color || this.settings.secondaryColor,
           welcomeMessage: data.welcome_message || this.settings.welcomeMessage,
           fallbackMessage: data.fallback_message || this.settings.fallbackMessage,
+          aiEnabled: data.ai_enabled || false,
+          aiModel: data.ai_model,
+          aiContext: data.ai_context,
+          isLive: false
         };
 
         // Update widget if it exists
@@ -97,6 +108,10 @@ class BusinessChatPlugin {
               secondaryColor: newData.secondary_color || this.settings.secondaryColor,
               welcomeMessage: newData.welcome_message || this.settings.welcomeMessage,
               fallbackMessage: newData.fallback_message || this.settings.fallbackMessage,
+              aiEnabled: newData.ai_enabled || false,
+              aiModel: newData.ai_model,
+              aiContext: newData.ai_context,
+              isLive: this.settings.isLive
             };
             this.updateWidgetStyles();
             this.updateWidgetContent();
@@ -106,7 +121,32 @@ class BusinessChatPlugin {
 
     } catch (error) {
       console.error('Error loading settings:', error);
-      // Continue with default settings
+    }
+  }
+
+  async loadRules() {
+    try {
+      // Load auto reply rules
+      const { data: autoRules, error: autoError } = await this.supabase
+        .from('auto_reply_rules')
+        .select('*')
+        .eq('user_id', this.config.uid);
+
+      if (!autoError) {
+        this.autoRules = autoRules || [];
+      }
+
+      // Load advanced reply rules
+      const { data: advancedRules, error: advError } = await this.supabase
+        .from('advanced_reply_rules')
+        .select('*')
+        .eq('user_id', this.config.uid);
+
+      if (!advError) {
+        this.advancedRules = advancedRules || [];
+      }
+    } catch (error) {
+      console.error('Error loading rules:', error);
     }
   }
 
@@ -178,9 +218,13 @@ class BusinessChatPlugin {
   handleSessionUpdate(payload) {
     const session = payload.new;
     if (session.status === 'active' && payload.old.status !== 'active') {
+      this.settings.isLive = true;
       this.addSystemMessage('An agent has joined the chat.');
+      this.updateWidgetContent();
     } else if (session.status === 'closed' && payload.old.status !== 'closed') {
+      this.settings.isLive = false;
       this.addSystemMessage('Chat session has ended.');
+      this.updateWidgetContent();
     }
   }
 
@@ -195,6 +239,63 @@ class BusinessChatPlugin {
     }
   }
 
+  async processAutoReply(content) {
+    // Check auto reply rules
+    for (const rule of this.autoRules) {
+      if (this.matchesRule(content, rule)) {
+        await this.sendMessage(rule.response, 'bot');
+        return true;
+      }
+    }
+
+    // Check advanced reply rules
+    for (const rule of this.advancedRules) {
+      if (this.matchesRule(content, rule)) {
+        await this.sendMessage(rule.response, 'bot', rule.is_html);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  matchesRule(content, rule) {
+    const userContent = content.toLowerCase();
+    
+    switch (rule.match_type) {
+      case 'exact':
+        return rule.keywords.some(keyword => 
+          userContent === keyword.toLowerCase()
+        );
+      
+      case 'fuzzy':
+        return rule.keywords.some(keyword =>
+          userContent.includes(keyword.toLowerCase())
+        );
+      
+      case 'regex':
+        return rule.keywords.some(keyword => {
+          try {
+            const regex = new RegExp(keyword, 'i');
+            return regex.test(content);
+          } catch (e) {
+            return false;
+          }
+        });
+      
+      case 'synonym':
+        // Basic synonym matching - could be enhanced with a proper synonym database
+        return rule.keywords.some(keyword =>
+          userContent.split(/\s+/).some(word => 
+            word === keyword.toLowerCase()
+          )
+        );
+      
+      default:
+        return false;
+    }
+  }
+
   async sendMessage(content, sender, isHtml = false) {
     if (!this.sessionId) {
       console.error('No active chat session');
@@ -202,6 +303,16 @@ class BusinessChatPlugin {
     }
 
     try {
+      // If it's a user message, process it through rules first
+      if (sender === 'user') {
+        const messageHandled = await this.processAutoReply(content);
+        
+        // If no rule matched and AI is enabled, we could process with AI here
+        if (!messageHandled && !this.settings.isLive) {
+          await this.sendMessage(this.settings.fallbackMessage, 'bot');
+        }
+      }
+
       const { data, error } = await this.supabase
         .from('chat_messages')
         .insert({
@@ -241,12 +352,18 @@ class BusinessChatPlugin {
   updateWidgetContent() {
     const headerTitle = document.querySelector('#business-chat-widget .chat-header h3');
     const headerSubtitle = document.querySelector('#business-chat-widget .chat-header p');
+    const statusIndicator = document.querySelector('#business-chat-widget .chat-header .status-indicator');
     
     if (headerTitle) {
       headerTitle.textContent = this.settings.businessName;
     }
     if (headerSubtitle) {
-      headerSubtitle.textContent = this.settings.representativeName;
+      headerSubtitle.textContent = this.settings.isLive 
+        ? 'Live Chat Agent' 
+        : this.settings.representativeName;
+    }
+    if (statusIndicator) {
+      statusIndicator.className = `status-indicator ${this.settings.isLive ? 'online' : ''}`;
     }
   }
 
@@ -317,6 +434,20 @@ class BusinessChatPlugin {
         margin: 4px 0 0;
         font-size: 0.9em;
         opacity: 0.9;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .status-indicator {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #64748b;
+      }
+
+      .status-indicator.online {
+        background: #22c55e;
       }
 
       .chat-messages {
@@ -429,7 +560,10 @@ class BusinessChatPlugin {
     chatWindow.innerHTML = `
       <div class="chat-header">
         <h3>${this.settings.businessName}</h3>
-        <p>${this.settings.representativeName}</p>
+        <p>
+          <span class="status-indicator"></span>
+          ${this.settings.representativeName}
+        </p>
       </div>
       <div class="chat-messages"></div>
       <div class="chat-input">
