@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Send, Search, MoreVertical, Phone, Video, Archive, Edit2, Pin, Trash2, MessageSquarePlus, X, MessageSquare } from 'lucide-react';
+import { Users, Send, Search, MoreVertical, RefreshCw, X, Calendar, Pin } from 'lucide-react';
 import { useChatStore } from '../store/chatStore';
 import { supabase } from '../lib/supabase';
 import { toast } from 'react-hot-toast';
@@ -25,24 +25,19 @@ interface ChatMessage {
   status?: 'sent' | 'delivered' | 'read';
 }
 
-interface MessageAction {
-  messageId: string;
-  position: { x: number; y: number };
-}
-
 export const LiveChat: React.FC = () => {
-  const { settings, toggleOnlineStatus } = useChatStore();
+  const { settings } = useChatStore();
   const [sessions, setSessions] = React.useState<ChatSession[]>([]);
   const [selectedSession, setSelectedSession] = React.useState<string | null>(null);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = React.useState('');
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setSaving] = React.useState(false);
   const [searchTerm, setSearchTerm] = React.useState('');
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
-  const [activeMessageAction, setActiveMessageAction] = React.useState<MessageAction | null>(null);
-  const [editingName, setEditingName] = React.useState<string>('');
+  const [showSessionActions, setShowSessionActions] = React.useState<string | null>(null);
   const [showNotes, setShowNotes] = React.useState(false);
   const [notes, setNotes] = React.useState('');
+  const [editingName, setEditingName] = React.useState<{ id: string; name: string } | null>(null);
 
   React.useEffect(() => {
     loadSessions();
@@ -82,20 +77,19 @@ export const LiveChat: React.FC = () => {
 
   const loadSessions = async () => {
     try {
-      setLoading(true);
+      setSaving(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // First get all sessions
       const { data: sessionsData, error: sessionsError } = await supabase
         .from('chat_sessions')
         .select('*')
         .eq('user_id', user.id)
+        .order('pinned', { ascending: false })
         .order('created_at', { ascending: false });
 
       if (sessionsError) throw sessionsError;
 
-      // Then get the last message for each session
       const sessionsWithMessages = await Promise.all(
         sessionsData.map(async (session) => {
           const { data: messages, error: messagesError } = await supabase
@@ -122,7 +116,7 @@ export const LiveChat: React.FC = () => {
       console.error('Error loading sessions:', error);
       toast.error('Failed to load chat sessions');
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
@@ -131,7 +125,8 @@ export const LiveChat: React.FC = () => {
       .from('chat_messages')
       .select('*', { count: 'exact', head: true })
       .eq('session_id', sessionId)
-      .is('read_at', null);
+      .is('read_at', null)
+      .eq('sender', 'user');
 
     if (error) {
       console.error('Error getting unread count:', error);
@@ -159,10 +154,12 @@ export const LiveChat: React.FC = () => {
 
   const markMessagesAsRead = async (sessionId: string) => {
     try {
-      const { error } = await supabase.rpc('mark_messages_as_read', {
-        p_session_id: sessionId,
-        p_message_id: messages[messages.length - 1]?.id
-      });
+      const { error } = await supabase
+        .from('chat_messages')
+        .update({ read_at: new Date().toISOString() })
+        .eq('session_id', sessionId)
+        .is('read_at', null)
+        .eq('sender', 'user');
 
       if (error) throw error;
 
@@ -208,33 +205,31 @@ export const LiveChat: React.FC = () => {
     }
   };
 
-  const handleMessageAction = (e: React.MouseEvent, messageId: string) => {
-    e.preventDefault();
-    setActiveMessageAction({
-      messageId,
-      position: { x: e.clientX, y: e.clientY }
-    });
-  };
-
-  const handleRenameVisitor = async (sessionId: string, newName: string) => {
+  const handleRenameVisitor = async () => {
+    if (!editingName) return;
+    
     try {
+      setSaving(true);
       const { error } = await supabase
         .from('chat_sessions')
-        .update({ visitor_name: newName })
-        .eq('id', sessionId);
+        .update({ visitor_name: editingName.name })
+        .eq('id', editingName.id);
 
       if (error) throw error;
 
       setSessions(prev => prev.map(session => 
-        session.id === sessionId 
-          ? { ...session, visitor_name: newName }
+        session.id === editingName.id
+          ? { ...session, visitor_name: editingName.name }
           : session
       ));
 
+      setEditingName(null);
       toast.success('Visitor renamed successfully');
     } catch (error) {
       console.error('Error renaming visitor:', error);
       toast.error('Failed to rename visitor');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -243,6 +238,7 @@ export const LiveChat: React.FC = () => {
     if (!session) return;
 
     try {
+      setSaving(true);
       const { error } = await supabase
         .from('chat_sessions')
         .update({ pinned: !session.pinned })
@@ -256,15 +252,19 @@ export const LiveChat: React.FC = () => {
           : s
       ));
 
+      setShowSessionActions(null);
       toast.success(session.pinned ? 'Chat unpinned' : 'Chat pinned');
     } catch (error) {
       console.error('Error toggling pin:', error);
       toast.error('Failed to update pin status');
+    } finally {
+      setSaving(false);
     }
   };
 
   const updateNotes = async (sessionId: string, newNotes: string) => {
     try {
+      setSaving(true);
       const { error } = await supabase
         .from('chat_sessions')
         .update({ notes: newNotes })
@@ -282,49 +282,32 @@ export const LiveChat: React.FC = () => {
     } catch (error) {
       console.error('Error updating notes:', error);
       toast.error('Failed to update notes');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const deleteMessage = async (messageId: string) => {
+  const closeSession = async (sessionId: string) => {
     try {
+      setSaving(true);
       const { error } = await supabase
-        .from('chat_messages')
-        .delete()
-        .eq('id', messageId);
-
-      if (error) throw error;
-
-      setMessages(prev => prev.filter(m => m.id !== messageId));
-      toast.success('Message deleted');
-    } catch (error) {
-      console.error('Error deleting message:', error);
-      toast.error('Failed to delete message');
-    }
-  };
-
-  const createNewSession = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data, error } = await supabase
         .from('chat_sessions')
-        .insert({
-          user_id: user.id,
-          visitor_id: crypto.randomUUID(),
-          status: 'active'
-        })
-        .select()
-        .single();
+        .update({ status: 'closed' })
+        .eq('id', sessionId);
 
       if (error) throw error;
-
-      setSessions(prev => [data, ...prev]);
-      setSelectedSession(data.id);
-      toast.success('New conversation started');
+      
+      if (sessionId === selectedSession) {
+        setSelectedSession(null);
+      }
+      await loadSessions();
+      setShowSessionActions(null);
+      toast.success('Chat session closed');
     } catch (error) {
-      console.error('Error creating session:', error);
-      toast.error('Failed to create new conversation');
+      console.error('Error closing session:', error);
+      toast.error('Failed to close session');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -351,31 +334,6 @@ export const LiveChat: React.FC = () => {
     }
   };
 
-  const closeSession = async (sessionId: string) => {
-    try {
-      const { error } = await supabase
-        .from('chat_sessions')
-        .update({ status: 'closed' })
-        .eq('id', sessionId);
-
-      if (error) throw error;
-      
-      if (sessionId === selectedSession) {
-        setSelectedSession(null);
-      }
-      await loadSessions();
-      toast.success('Chat session closed');
-    } catch (error) {
-      console.error('Error closing session:', error);
-      toast.error('Failed to close session');
-    }
-  };
-
-  const filteredSessions = sessions.filter(session => 
-    session.visitor_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    session.last_message?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
   const formatTime = (timestamp: string) => {
     const date = new Date(timestamp);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -397,6 +355,11 @@ export const LiveChat: React.FC = () => {
 
   const isSystemMessage = (sender: string) => ['bot', 'ai', 'agent'].includes(sender);
 
+  const filteredSessions = sessions.filter(session => 
+    session.visitor_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    session.last_message?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
     <div className="h-[calc(100vh-8rem)] bg-white rounded-xl shadow-lg overflow-hidden flex">
       <div className="w-80 border-r border-gray-200 flex flex-col min-w-0">
@@ -406,25 +369,13 @@ export const LiveChat: React.FC = () => {
               <Users className="w-5 h-5 text-blue-600" />
               <h2 className="font-semibold">Active Chats</h2>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={createNewSession}
-                className="p-2 text-blue-600 hover:bg-blue-50 rounded-full"
-                title="New Conversation"
-              >
-                <MessageSquarePlus className="w-5 h-5" />
-              </button>
-              <button
-                onClick={toggleOnlineStatus}
-                className={`px-3 py-1 rounded-full text-sm ${
-                  settings.isOnline
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-gray-100 text-gray-700'
-                }`}
-              >
-                {settings.isOnline ? '● Online' : '○ Offline'}
-              </button>
-            </div>
+            <button
+              onClick={loadSessions}
+              className="p-2 text-gray-600 hover:bg-gray-100 rounded-full"
+              title="Refresh"
+            >
+              <RefreshCw className="w-5 h-5" />
+            </button>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -445,7 +396,7 @@ export const LiveChat: React.FC = () => {
             </div>
           ) : filteredSessions.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-32 text-gray-500">
-              <MessageSquare className="w-8 h-8 mb-2" />
+              <Users className="w-8 h-8 mb-2" />
               <p>No conversations yet</p>
             </div>
           ) : (
@@ -465,16 +416,25 @@ export const LiveChat: React.FC = () => {
                       ? 'bg-green-100 text-green-700'
                       : 'bg-gray-100 text-gray-700'
                   }`}>
-                    {session.visitor_id.slice(0, 2).toUpperCase()}
+                    {session.visitor_name 
+                      ? session.visitor_name.slice(0, 2).toUpperCase()
+                      : session.visitor_id.slice(0, 2).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between">
-                      <h3 className="font-medium truncate">
-                        {session.visitor_name || `Visitor ${session.visitor_id.slice(0, 8)}`}
-                      </h3>
-                      <span className="text-xs text-gray-500 ml-2 shrink-0">
-                        {formatDate(session.created_at)}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-medium truncate">
+                          {session.visitor_name || `Visitor ${session.visitor_id.slice(0, 8)}`}
+                        </h3>
+                        {session.pinned && (
+                          <Pin className="w-4 h-4 text-blue-600" />
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500 shrink-0">
+                          {formatDate(session.created_at)}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2 mt-1">
                       <p className="text-sm text-gray-500 truncate">
@@ -499,75 +459,115 @@ export const LiveChat: React.FC = () => {
           <div className="p-4 border-b flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
-                {sessions.find(s => s.id === selectedSession)?.visitor_id.slice(0, 2).toUpperCase()}
+                {sessions.find(s => s.id === selectedSession)?.visitor_name?.slice(0, 2).toUpperCase() || 
+                 sessions.find(s => s.id === selectedSession)?.visitor_id.slice(0, 2).toUpperCase()}
               </div>
               <div>
-                <h3 className="font-medium">
-                  {sessions.find(s => s.id === selectedSession)?.visitor_name || 
-                   `Visitor ${sessions.find(s => s.id === selectedSession)?.visitor_id.slice(0, 8)}`}
-                </h3>
+                {editingName?.id === selectedSession ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={editingName.name}
+                      onChange={(e) => setEditingName({ ...editingName, name: e.target.value })}
+                      className="px-2 py-1 border rounded text-sm"
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleRenameVisitor}
+                      disabled={loading}
+                      className="px-2 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingName(null)}
+                      className="px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <h3 className="font-medium">
+                    {sessions.find(s => s.id === selectedSession)?.visitor_name || 
+                     `Visitor ${sessions.find(s => s.id === selectedSession)?.visitor_id.slice(0, 8)}`}
+                  </h3>
+                )}
                 <p className="text-sm text-gray-500">
                   Session started {formatDate(sessions.find(s => s.id === selectedSession)?.created_at || '')}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="relative">
               <button
-                onClick={() => closeSession(selectedSession)}
+                onClick={() => setShowSessionActions(showSessionActions === selectedSession ? null : selectedSession)}
                 className="p-2 text-gray-600 hover:bg-gray-100 rounded-full"
-                title="Close Chat"
               >
-                <Archive className="w-5 h-5" />
+                <MoreVertical className="w-5 h-5" />
               </button>
-              <button
-                onClick={() => setShowNotes(!showNotes)}
-                className="p-2 text-gray-600 hover:bg-gray-100 rounded-full"
-                title="Notes"
-              >
-                <Edit2 className="w-5 h-5" />
-              </button>
-              <button
-                onClick={() => togglePinSession(selectedSession)}
-                className={`p-2 rounded-full ${
-                  sessions.find(s => s.id === selectedSession)?.pinned
-                    ? 'text-blue-600 bg-blue-50'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-                title="Pin Chat"
-              >
-                <Pin className="w-5 h-5" />
-              </button>
+              {showSessionActions === selectedSession && (
+                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg py-1 z-10">
+                  <button
+                    onClick={() => {
+                      const session = sessions.find(s => s.id === selectedSession);
+                      setEditingName({ id: selectedSession, name: session?.visitor_name || '' });
+                      setShowSessionActions(null);
+                    }}
+                    className="w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-50"
+                  >
+                    Rename Visitor
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowNotes(true);
+                      setShowSessionActions(null);
+                    }}
+                    className="w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-50"
+                  >
+                    Add Notes
+                  </button>
+                  <button
+                    onClick={() => togglePinSession(selectedSession)}
+                    className="w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-50"
+                  >
+                    {sessions.find(s => s.id === selectedSession)?.pinned ? 'Unpin Chat' : 'Pin Chat'}
+                  </button>
+                  <button
+                    onClick={() => closeSession(selectedSession)}
+                    className="w-full px-4 py-2 text-left text-red-600 hover:bg-red-50"
+                  >
+                    Close Chat
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((message, index) => (
+          <div className="flex-1 overflow-y-auto p-4">
+            {messages.map((message) => (
               <div
                 key={message.id}
-                className={`flex ${
-                  message.sender === 'user' ? 'justify-end' : 'justify-start'
+                className={`mb-4 flex flex-col ${
+                  message.sender === 'user' ? 'items-start' : 'items-end'
                 }`}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  handleMessageAction(e, message.id);
-                }}
               >
                 <div
-                  className={`max-w-[70%] p-3 rounded-lg ${
+                  className={`max-w-[70%] rounded-lg px-4 py-2 ${
                     message.sender === 'user'
-                      ? 'bg-blue-500 text-white'
+                      ? 'bg-gray-100 text-gray-900'
                       : message.sender === 'ai'
                       ? 'bg-purple-100 text-purple-900'
-                      : 'bg-gray-100 text-gray-900'
+                      : 'bg-blue-500 text-white'
                   }`}
                 >
                   <p>{message.content}</p>
-                  <div className="text-xs mt-1 opacity-70 flex items-center gap-1">
-                    {formatTime(message.created_at)}
-                    {message.status === 'read' && (
-                      <span className="text-xs">✓✓</span>
-                    )}
-                  </div>
+                </div>
+                <div className={`text-xs text-gray-500 mt-1 ${
+                  message.sender === 'user' ? 'ml-2' : 'mr-2'
+                }`}>
+                  {formatTime(message.created_at)}
+                  {message.sender !== 'user' && message.status === 'read' && (
+                    <span className="ml-1">✓✓</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -597,39 +597,10 @@ export const LiveChat: React.FC = () => {
       ) : (
         <div className="flex-1 flex items-center justify-center text-gray-500">
           <div className="text-center">
-            <MessageSquare className="w-12 h-12 mx-auto mb-4" />
+            <Users className="w-12 h-12 mx-auto mb-4" />
             <p>Select a conversation to start chatting</p>
           </div>
         </div>
-      )}
-
-      {activeMessageAction && (
-        <>
-          <div
-            className="fixed inset-0"
-            onClick={() => setActiveMessageAction(null)}
-          />
-          <div
-            className="absolute bg-white rounded-lg shadow-lg py-1 z-50"
-            style={{
-              top: activeMessageAction.position.y,
-              left: activeMessageAction.position.x,
-            }}
-          >
-            {messages.find(m => m.id === activeMessageAction.messageId)?.sender === 'user' && (
-              <button
-                onClick={() => {
-                  deleteMessage(activeMessageAction.messageId);
-                  setActiveMessageAction(null);
-                }}
-                className="w-full px-4 py-2 text-left text-red-600 hover:bg-red-50 flex items-center gap-2"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete Message
-              </button>
-            )}
-          </div>
-        </>
       )}
 
       {showNotes && selectedSession && (
@@ -649,7 +620,7 @@ export const LiveChat: React.FC = () => {
               onChange={(e) => setNotes(e.target.value)}
               onBlur={() => updateNotes(selectedSession, notes)}
               placeholder="Add notes about this conversation..."
-              className="w-full h-40 p-2 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full h-32 p-2 border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
         </div>
