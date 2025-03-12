@@ -240,8 +240,8 @@ export const LiveChat: React.FC = () => {
                   >
                     <div className={`max-w-[70%] p-3 rounded-lg ${
                       message.sender === 'agent'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100'
+                        ? 'bg-blue-600 text-white rounded-tr-none'
+                        : 'bg-gray-100 text-gray-800 rounded-tl-none'
                     }`}>
                       <p>{message.content}</p>
                       <p className="text-xs mt-1 opacity-70">

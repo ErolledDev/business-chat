@@ -163,10 +163,10 @@ export const ChatWidget: React.FC = () => {
             <div
               className={`max-w-[80%] p-3 rounded-lg ${
                 message.sender === 'user'
-                  ? 'bg-blue-500 text-white'
+                  ? 'bg-blue-500 text-white rounded-tr-none'
                   : message.sender === 'ai'
-                  ? 'bg-purple-100 text-purple-900'
-                  : 'bg-gray-100 text-gray-800'
+                  ? 'bg-purple-100 text-purple-900 rounded-tl-none'
+                  : 'bg-gray-100 text-gray-800 rounded-tl-none'
               }`}
             >
               {message.isHtml ? (
@@ -178,6 +178,9 @@ export const ChatWidget: React.FC = () => {
               ) : (
                 <p>{message.content}</p>
               )}
+              <div className="text-xs mt-1 opacity-70">
+                {new Date(message.timestamp).toLocaleTimeString()}
+              </div>
             </div>
           </div>
         ))}
