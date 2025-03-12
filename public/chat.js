@@ -623,6 +623,7 @@ class BusinessChatPlugin {
         flex-direction: column;
         gap: 2px;
         max-width: 85%;
+        margin-bottom: 12px;
       }
 
       .message-group.user {
@@ -638,7 +639,7 @@ class BusinessChatPlugin {
       .message-time {
         font-size: 0.75em;
         color: #64748b;
-        margin: 0 8px;
+        margin: 4px 8px 0;
       }
 
       .message-group.user .message-time {
@@ -652,12 +653,14 @@ class BusinessChatPlugin {
         position: relative;
         font-size: 0.95em;
         line-height: 1.4;
+        max-width: 100%;
       }
 
       .message.user {
         background: ${this.settings.primaryColor};
         color: white;
         border-radius: 16px 16px 4px 16px;
+        align-self: flex-end;
       }
 
       .message.bot {
@@ -665,6 +668,7 @@ class BusinessChatPlugin {
         color: #1f2937;
         border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        align-self: flex-start;
       }
 
       .message.ai {
@@ -672,6 +676,7 @@ class BusinessChatPlugin {
         color: #6b21a8;
         border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        align-self: flex-start;
       }
 
       .message.agent {
@@ -679,6 +684,7 @@ class BusinessChatPlugin {
         color: #075985;
         border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        align-self: flex-start;
       }
 
       .message.system {
@@ -690,6 +696,7 @@ class BusinessChatPlugin {
         border-radius: 12px;
         max-width: 90%;
         text-align: center;
+        margin: 8px 0;
       }
 
       .typing-indicator {
@@ -866,16 +873,6 @@ class BusinessChatPlugin {
       minute: '2-digit' 
     });
 
-    // Create or find message group
-    let messageGroup = messagesContainer.lastElementChild;
-    if (!messageGroup || 
-        !messageGroup.classList.contains('message-group') || 
-        !messageGroup.classList.contains(message.sender)) {
-      messageGroup = document.createElement('div');
-      messageGroup.className = `message-group ${message.sender}`;
-      messagesContainer.appendChild(messageGroup);
-    }
-
     // Create message element
     const messageEl = document.createElement('div');
     messageEl.className = `message ${message.sender}`;
@@ -891,9 +888,13 @@ class BusinessChatPlugin {
     timeEl.className = 'message-time';
     timeEl.textContent = time;
 
+    // Create message group
+    const messageGroup = document.createElement('div');
+    messageGroup.className = `message-group ${message.sender}`;
     messageGroup.appendChild(messageEl);
     messageGroup.appendChild(timeEl);
     
+    messagesContainer.appendChild(messageGroup);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
