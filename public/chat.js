@@ -176,8 +176,33 @@ class BusinessChatPlugin {
       if (this.settings.welcomeMessage) {
         await this.sendMessage(this.settings.welcomeMessage, 'bot');
       }
+
+      // Load existing messages for this session
+      await this.loadMessages();
     } catch (error) {
       console.error('Error creating chat session:', error);
+    }
+  }
+
+  async loadMessages() {
+    if (!this.sessionId) return;
+
+    try {
+      const { data, error } = await this.supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('session_id', this.sessionId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error loading messages:', error);
+        return;
+      }
+
+      this.messages = data || [];
+      this.messages.forEach(message => this.renderMessage(message));
+    } catch (error) {
+      console.error('Error loading messages:', error);
     }
   }
 
@@ -454,12 +479,14 @@ class BusinessChatPlugin {
         flex: 1;
         overflow-y: auto;
         padding: 16px;
+        background: #f8fafc;
       }
 
       .message {
         margin-bottom: 12px;
         max-width: 80%;
         clear: both;
+        word-wrap: break-word;
       }
 
       .message.user {
@@ -472,10 +499,11 @@ class BusinessChatPlugin {
 
       .message.bot {
         float: left;
-        background: #f0f0f0;
+        background: white;
         color: #333;
         border-radius: 12px 12px 12px 0;
         padding: 8px 12px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
 
       .message.system {
@@ -485,6 +513,9 @@ class BusinessChatPlugin {
         font-style: italic;
         margin: 8px 0;
         font-size: 0.9em;
+        background: rgba(0, 0, 0, 0.05);
+        padding: 4px 8px;
+        border-radius: 4px;
       }
 
       .chat-input {
@@ -492,6 +523,7 @@ class BusinessChatPlugin {
         border-top: 1px solid #e5e7eb;
         display: flex;
         gap: 8px;
+        background: white;
       }
 
       .chat-input input {
@@ -528,6 +560,38 @@ class BusinessChatPlugin {
       .chat-input button svg {
         width: 16px;
         height: 16px;
+      }
+
+      .message-time {
+        font-size: 0.75em;
+        opacity: 0.7;
+        margin-top: 4px;
+      }
+
+      .typing-indicator {
+        display: flex;
+        gap: 4px;
+        padding: 8px 12px;
+        background: white;
+        border-radius: 12px;
+        width: fit-content;
+        margin-bottom: 12px;
+      }
+
+      .typing-dot {
+        width: 6px;
+        height: 6px;
+        background: #94a3b8;
+        border-radius: 50%;
+        animation: typing 1s infinite;
+      }
+
+      .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+      .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+      @keyframes typing {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-4px); }
       }
     `;
   }
@@ -581,6 +645,9 @@ class BusinessChatPlugin {
     // Add event listeners
     button.addEventListener('click', () => {
       chatWindow.classList.toggle('open');
+      if (chatWindow.classList.contains('open')) {
+        chatWindow.querySelector('input').focus();
+      }
     });
 
     const input = chatWindow.querySelector('input');
@@ -609,11 +676,19 @@ class BusinessChatPlugin {
     const messageEl = document.createElement('div');
     messageEl.className = `message ${message.sender}`;
     
+    const messageContent = document.createElement('div');
     if (message.is_html) {
-      messageEl.innerHTML = message.content;
+      messageContent.innerHTML = message.content;
     } else {
-      messageEl.textContent = message.content;
+      messageContent.textContent = message.content;
     }
+    messageEl.appendChild(messageContent);
+
+    // Add timestamp
+    const timeEl = document.createElement('div');
+    timeEl.className = 'message-time';
+    timeEl.textContent = new Date(message.created_at).toLocaleTimeString();
+    messageEl.appendChild(timeEl);
     
     messagesContainer.appendChild(messageEl);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
