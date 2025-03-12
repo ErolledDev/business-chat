@@ -25,8 +25,8 @@ class BusinessChatPlugin {
     try {
       await this.initSupabase();
       await this.loadSettings();
-      await this.createChatSession();
       this.createWidget();
+      await this.createChatSession();
       this.initRealtime();
     } catch (error) {
       console.error('Initialization error:', error);
@@ -47,6 +47,20 @@ class BusinessChatPlugin {
 
     // Initialize Supabase client
     this.supabase = supabase.createClient(this.supabaseUrl, this.supabaseKey);
+
+    // Set up anonymous session
+    const { data: { session }, error: authError } = await this.supabase.auth.signUp({
+      email: `visitor-${crypto.randomUUID()}@anonymous.chat`,
+      password: crypto.randomUUID(),
+    });
+
+    if (authError) {
+      console.error('Auth error:', authError);
+      throw authError;
+    }
+
+    // Store the session
+    this.session = session;
   }
 
   async loadSettings() {
@@ -57,7 +71,7 @@ class BusinessChatPlugin {
         .eq('user_id', this.config.uid)
         .single();
 
-      if (error) throw error;
+      if (error && error.code !== 'PGRST116') throw error;
 
       if (data) {
         this.settings = {
@@ -106,25 +120,30 @@ class BusinessChatPlugin {
   }
 
   async createChatSession() {
-    const visitorId = localStorage.getItem('visitorId') || crypto.randomUUID();
-    localStorage.setItem('visitorId', visitorId);
+    try {
+      const visitorId = localStorage.getItem('visitorId') || crypto.randomUUID();
+      localStorage.setItem('visitorId', visitorId);
 
-    const { data, error } = await this.supabase
-      .from('chat_sessions')
-      .insert({
-        user_id: this.config.uid,
-        visitor_id: visitorId,
-        status: 'active'
-      })
-      .select()
-      .single();
+      const { data, error } = await this.supabase
+        .from('chat_sessions')
+        .insert({
+          user_id: this.config.uid,
+          visitor_id: visitorId,
+          status: 'active',
+          visitor_auth_id: this.session?.user?.id
+        })
+        .select()
+        .single();
 
-    if (error) throw error;
-    this.sessionId = data.id;
+      if (error) throw error;
+      this.sessionId = data.id;
 
-    // Add welcome message after session creation
-    if (this.settings.welcomeMessage) {
-      await this.sendMessage(this.settings.welcomeMessage, 'bot');
+      // Add welcome message after session creation
+      if (this.settings.welcomeMessage) {
+        await this.sendMessage(this.settings.welcomeMessage, 'bot');
+      }
+    } catch (error) {
+      console.error('Error creating chat session:', error);
     }
   }
 
