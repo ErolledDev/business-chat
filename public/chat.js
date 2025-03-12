@@ -26,7 +26,7 @@ class BusinessChatPlugin {
     this.advancedRules = [];
     this.isTyping = false;
     this.typingTimeout = null;
-    this.init();
+    this.initialized = false;
   }
 
   async init() {
@@ -37,6 +37,7 @@ class BusinessChatPlugin {
       this.createWidget();
       await this.createChatSession();
       this.initRealtime();
+      this.initialized = true;
     } catch (error) {
       console.error('Initialization error:', error);
       this.createWidget();
@@ -166,15 +167,16 @@ class BusinessChatPlugin {
 
       this.sessionId = data.id;
 
-      if (this.settings.welcomeMessage) {
-        await this.showTypingIndicator();
-        setTimeout(async () => {
-          await this.sendMessage(this.settings.welcomeMessage, 'bot');
-          this.hideTypingIndicator();
-        }, 1000);
-      }
-
+      // Load existing messages first
       await this.loadMessages();
+
+      // Then show welcome message if no messages exist
+      if (this.messages.length === 0 && this.settings.welcomeMessage) {
+        await this.showTypingIndicator();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await this.sendMessage(this.settings.welcomeMessage, 'bot');
+        this.hideTypingIndicator();
+      }
     } catch (error) {
       console.error('Error creating chat session:', error);
     }
@@ -196,7 +198,11 @@ class BusinessChatPlugin {
       }
 
       this.messages = data || [];
-      this.messages.forEach(message => this.renderMessage(message));
+      const messagesContainer = document.querySelector('.chat-messages');
+      if (messagesContainer) {
+        messagesContainer.innerHTML = ''; // Clear existing messages
+        this.messages.forEach(message => this.renderMessage(message));
+      }
     } catch (error) {
       console.error('Error loading messages:', error);
     }
