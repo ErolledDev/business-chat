@@ -1,8 +1,8 @@
 import React from 'react';
 import { Plus, Download, Upload, Trash2, Edit } from 'lucide-react';
 import Papa from 'papaparse';
-import { supabase } from '../lib/supabase';
 import { toast } from 'react-hot-toast';
+import { useRulesStore } from '../store/rulesStore';
 
 interface Rule {
   id: string;
@@ -12,90 +12,32 @@ interface Rule {
 }
 
 export const AutoReply: React.FC = () => {
-  const [rules, setRules] = React.useState<Rule[]>([]);
-  const [saving, setSaving] = React.useState(false);
+  const { autoRules, loading, fetchRules, addAutoRule, updateAutoRule, deleteAutoRule } = useRulesStore();
   const [editingRule, setEditingRule] = React.useState<Rule | null>(null);
+  const [saving, setSaving] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
-    loadRules();
-  }, []);
+    fetchRules();
+  }, [fetchRules]);
 
-  const loadRules = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data, error } = await supabase
-        .from('auto_reply_rules')
-        .select('*')
-        .eq('user_id', user.id);
-
-      if (error) throw error;
-
-      if (data) {
-        setRules(data.map(rule => ({
-          id: rule.id,
-          keywords: rule.keywords,
-          matchType: rule.match_type,
-          response: rule.response,
-        })));
-      }
-    } catch (error) {
-      console.error('Error loading rules:', error);
-      toast.error('Failed to load auto-reply rules');
-    }
-  };
-
-  const saveRule = async (rule: Rule) => {
+  const handleSaveRule = async (rule: Rule) => {
     try {
       setSaving(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('No user found');
-
-      const { error } = await supabase
-        .from('auto_reply_rules')
-        .upsert({
-          id: rule.id,
-          user_id: user.id,
-          keywords: rule.keywords,
-          match_type: rule.matchType,
-          response: rule.response,
-        });
-
-      if (error) throw error;
-      
-      await loadRules(); // Reload rules after saving
+      if (rule.id === 'new') {
+        await addAutoRule(rule);
+      } else {
+        await updateAutoRule(rule);
+      }
       setEditingRule(null);
-      toast.success('Rule saved successfully!');
-    } catch (error) {
-      console.error('Error saving rule:', error);
-      toast.error('Failed to save rule');
     } finally {
       setSaving(false);
     }
   };
 
-  const deleteRule = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from('auto_reply_rules')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-      
-      setRules(rules.filter(rule => rule.id !== id));
-      toast.success('Rule deleted successfully!');
-    } catch (error) {
-      console.error('Error deleting rule:', error);
-      toast.error('Failed to delete rule');
-    }
-  };
-
   const addNewRule = () => {
     const newRule: Rule = {
-      id: crypto.randomUUID(),
+      id: 'new',
       keywords: [],
       matchType: 'exact',
       response: '',
@@ -110,7 +52,7 @@ export const AutoReply: React.FC = () => {
   };
 
   const exportRules = () => {
-    const csv = Papa.unparse(rules.map(rule => ({
+    const csv = Papa.unparse(autoRules.map(rule => ({
       keywords: rule.keywords.join(', '),
       matchType: rule.matchType,
       response: rule.response,
@@ -134,26 +76,18 @@ export const AutoReply: React.FC = () => {
       complete: async (results) => {
         try {
           setSaving(true);
-          const { data: { user } } = await supabase.auth.getUser();
-          if (!user) throw new Error('No user found');
-
           const importedRules = results.data
             .filter((row: any) => row.keywords && row.matchType && row.response)
             .map((row: any) => ({
-              id: crypto.randomUUID(),
-              user_id: user.id,
               keywords: row.keywords.split(',').map((k: string) => k.trim()),
-              match_type: row.matchType,
+              matchType: row.matchType as Rule['matchType'],
               response: row.response,
             }));
 
-          const { error } = await supabase
-            .from('auto_reply_rules')
-            .insert(importedRules);
+          for (const rule of importedRules) {
+            await addAutoRule(rule);
+          }
 
-          if (error) throw error;
-
-          await loadRules();
           toast.success('Rules imported successfully!');
         } catch (error) {
           console.error('Error importing rules:', error);
@@ -165,6 +99,14 @@ export const AutoReply: React.FC = () => {
       header: true,
     });
   };
+
+  if (loading && autoRules.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto p-6">
@@ -217,7 +159,7 @@ export const AutoReply: React.FC = () => {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {rules.map((rule) => (
+            {autoRules.map((rule) => (
               <tr key={rule.id} className="hover:bg-gray-50">
                 <td className="px-6 py-4">
                   <div className="text-sm text-gray-900">{rule.keywords.join(', ')}</div>
@@ -236,7 +178,7 @@ export const AutoReply: React.FC = () => {
                     <Edit className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => deleteRule(rule.id)}
+                    onClick={() => deleteAutoRule(rule.id)}
                     className="text-red-600 hover:text-red-900"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -253,7 +195,7 @@ export const AutoReply: React.FC = () => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg max-w-2xl w-full p-6">
             <h3 className="text-lg font-medium mb-4">
-              {editingRule.id === crypto.randomUUID() ? 'Add New Rule' : 'Edit Rule'}
+              {editingRule.id === 'new' ? 'Add New Rule' : 'Edit Rule'}
             </h3>
             <div className="space-y-4">
               <div>
@@ -297,7 +239,7 @@ export const AutoReply: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() => saveRule(editingRule)}
+                onClick={() => handleSaveRule(editingRule)}
                 disabled={saving}
                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400"
               >
