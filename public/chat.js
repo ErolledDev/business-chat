@@ -26,7 +26,8 @@ class BusinessChatPlugin {
     this.advancedRules = [];
     this.isTyping = false;
     this.typingTimeout = null;
-    this.initialized = false;
+    this.init();
+    
   }
 
   async init() {
