@@ -88,6 +88,7 @@ class BusinessChatPlugin {
         this.updateWidgetContent();
       }
 
+      // Subscribe to settings changes
       this.supabase
         .channel(`widget_settings:${this.config.uid}`)
         .on('postgres_changes', {
@@ -141,6 +142,23 @@ class BusinessChatPlugin {
       if (!advancedRules.error) {
         this.advancedRules = advancedRules.data || [];
       }
+
+      // Subscribe to rules changes
+      this.supabase
+        .channel(`rules_changes:${this.config.uid}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'auto_reply_rules',
+          filter: `user_id=eq.${this.config.uid}`,
+        }, () => this.loadRules())
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'advanced_reply_rules',
+          filter: `user_id=eq.${this.config.uid}`,
+        }, () => this.loadRules())
+        .subscribe();
     } catch (error) {
       console.error('Error loading rules:', error);
     }
@@ -333,6 +351,18 @@ class BusinessChatPlugin {
       return new Promise(resolve => {
         setTimeout(async () => {
           await this.sendMessage("AI is processing your request...", 'ai');
+          this.hideTypingIndicator();
+          resolve(true);
+        }, 1500);
+      });
+    }
+
+    // If in live mode and no rules matched
+    if (this.settings.isLive) {
+      await this.showTypingIndicator();
+      return new Promise(resolve => {
+        setTimeout(async () => {
+          await this.sendMessage("An agent will respond shortly...", 'agent');
           this.hideTypingIndicator();
           resolve(true);
         }, 1500);
