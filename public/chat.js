@@ -6,14 +6,28 @@ class BusinessChatPlugin {
     this.supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0';
     this.sessionId = null;
     this.messages = [];
+    this.settings = {
+      businessName: config.businessName || 'Business Chat',
+      primaryColor: config.primaryColor || '#2563eb',
+      secondaryColor: config.secondaryColor || '#1d4ed8',
+      welcomeMessage: 'Welcome! How can we help you today?',
+      fallbackMessage: "We'll get back to you soon!",
+    };
     this.init();
   }
 
   async init() {
-    await this.initSupabase();
-    await this.loadSettings();
-    this.createWidget();
-    this.initRealtime();
+    try {
+      await this.initSupabase();
+      await this.createChatSession();
+      await this.loadSettings();
+      this.createWidget();
+      this.initRealtime();
+    } catch (error) {
+      console.error('Initialization error:', error);
+      // Create widget with default settings if there's an error
+      this.createWidget();
+    }
   }
 
   async initSupabase() {
@@ -28,33 +42,55 @@ class BusinessChatPlugin {
 
     // Initialize Supabase client
     this.supabase = supabase.createClient(this.supabaseUrl, this.supabaseKey);
-    this.sessionId = crypto.randomUUID();
+  }
+
+  async createChatSession() {
+    const visitorId = localStorage.getItem('visitorId') || crypto.randomUUID();
+    localStorage.setItem('visitorId', visitorId);
+
+    const { data, error } = await this.supabase
+      .from('chat_sessions')
+      .insert({
+        user_id: this.config.uid,
+        visitor_id: visitorId,
+        status: 'active'
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    this.sessionId = data.id;
   }
 
   async loadSettings() {
     try {
-      const { data } = await this.supabase
+      const { data, error } = await this.supabase
         .from('widget_settings')
         .select('*')
         .eq('user_id', this.config.uid)
         .single();
 
+      if (error) throw error;
+
       if (data) {
         this.settings = {
-          ...this.config,
-          ...data,
+          businessName: data.business_name || this.settings.businessName,
+          primaryColor: data.primary_color || this.settings.primaryColor,
+          secondaryColor: data.secondary_color || this.settings.secondaryColor,
+          welcomeMessage: data.welcome_message || this.settings.welcomeMessage,
+          fallbackMessage: data.fallback_message || this.settings.fallbackMessage,
         };
       }
     } catch (error) {
       console.error('Error loading settings:', error);
-      this.settings = this.config;
+      // Continue with default settings
     }
   }
 
   initRealtime() {
     // Subscribe to new messages
     this.supabase
-      .channel('chat_messages')
+      .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -62,6 +98,33 @@ class BusinessChatPlugin {
         filter: `session_id=eq.${this.sessionId}`,
       }, this.handleNewMessage.bind(this))
       .subscribe();
+
+    // Subscribe to session status changes
+    this.supabase
+      .channel(`chat_sessions:${this.sessionId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'chat_sessions',
+        filter: `id=eq.${this.sessionId}`,
+      }, this.handleSessionUpdate.bind(this))
+      .subscribe();
+  }
+
+  handleSessionUpdate(payload) {
+    const session = payload.new;
+    if (session.status === 'active' && payload.old.status !== 'active') {
+      this.addSystemMessage('An agent has joined the chat.');
+    } else if (session.status === 'closed' && payload.old.status !== 'closed') {
+      this.addSystemMessage('Chat session has ended.');
+    }
+  }
+
+  addSystemMessage(content) {
+    const messageEl = document.createElement('div');
+    messageEl.className = 'message system';
+    messageEl.textContent = content;
+    document.querySelector('.chat-messages').appendChild(messageEl);
   }
 
   async handleNewMessage(payload) {
@@ -224,6 +287,23 @@ class BusinessChatPlugin {
         padding: 8px 12px;
       }
 
+      .message.system {
+        clear: both;
+        text-align: center;
+        color: #666;
+        font-style: italic;
+        margin: 8px 0;
+        font-size: 0.9em;
+      }
+
+      .message.agent {
+        float: left;
+        background: ${this.settings.secondaryColor};
+        color: white;
+        border-radius: 12px 12px 12px 0;
+        padding: 8px 12px;
+      }
+
       .chat-input {
         padding: 16px;
         border-top: 1px solid #e5e7eb;
@@ -282,8 +362,8 @@ class BusinessChatPlugin {
     // Add event listeners
     button.addEventListener('click', () => {
       chatWindow.classList.toggle('open');
-      if (chatWindow.classList.contains('open')) {
-        this.sendMessage(this.settings.welcome_message, 'bot');
+      if (chatWindow.classList.contains('open') && this.messages.length === 0) {
+        this.sendMessage(this.settings.welcomeMessage, 'bot');
       }
     });
 
