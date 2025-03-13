@@ -18,6 +18,7 @@ class BusinessChatPlugin {
     this.typingTimeout = null;
     this.hasNewMessage = false;
     this.messageQueue = new Set(); // Track message IDs to prevent duplicates
+    this.welcomeMessageShown = false; // Track if welcome message has been shown
 
     this.init();
   }
@@ -61,21 +62,19 @@ class BusinessChatPlugin {
 
       // Initialize realtime subscriptions
       this.initRealtime();
-
-      // Show welcome message
-      this.showWelcomeMessage();
     } catch (error) {
       console.error('Error initializing chat widget:', error);
     }
   }
 
   showWelcomeMessage() {
-    if (this.messages.length === 0) {
+    if (!this.welcomeMessageShown && this.messages.length === 0) {
       this.renderMessage({
         content: this.settings.welcomeMessage,
         sender: 'bot',
         created_at: new Date().toISOString()
       });
+      this.welcomeMessageShown = true;
     }
   }
 
@@ -549,26 +548,35 @@ class BusinessChatPlugin {
         gap: 12px;
       }
 
+      .message-container {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        margin-bottom: 16px;
+      }
+
+      .message-container.user {
+        align-items: flex-end;
+      }
+
       .message {
         padding: 12px 16px;
         border-radius: 16px;
         max-width: 80%;
-        margin-bottom: 8px;
         word-wrap: break-word;
         position: relative;
+        margin-bottom: 4px;
       }
 
       .message.user {
         background: ${this.settings.primaryColor};
         color: white;
-        align-self: flex-end;
         border-radius: 16px 16px 4px 16px;
       }
 
       .message.bot {
         background: white;
         color: #1f2937;
-        align-self: flex-start;
         border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
@@ -576,7 +584,6 @@ class BusinessChatPlugin {
       .message.ai {
         background: #f3e8ff;
         color: #6b21a8;
-        align-self: flex-start;
         border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
@@ -584,7 +591,6 @@ class BusinessChatPlugin {
       .message.agent {
         background: #e0f2fe;
         color: #075985;
-        align-self: flex-start;
         border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
@@ -596,6 +602,13 @@ class BusinessChatPlugin {
         align-self: center;
         text-align: center;
         border-radius: 12px;
+      }
+
+      .message-timestamp {
+        font-size: 0.75em;
+        color: #64748b;
+        margin-top: 2px;
+        padding: 0 4px;
       }
 
       .typing-indicator {
@@ -772,6 +785,9 @@ class BusinessChatPlugin {
     const messagesContainer = document.querySelector('.chat-messages');
     if (!messagesContainer) return;
 
+    const messageContainer = document.createElement('div');
+    messageContainer.className = `message-container ${message.sender}`;
+
     const messageEl = document.createElement('div');
     messageEl.className = `message ${message.sender}`;
 
@@ -789,16 +805,17 @@ class BusinessChatPlugin {
       messageEl.textContent = message.content;
     }
 
-    // Add timestamp
+    // Add timestamp outside the message bubble
     const timestampEl = document.createElement('div');
-    timestampEl.className = 'text-xs text-gray-500 mt-1';
+    timestampEl.className = 'message-timestamp';
     timestampEl.textContent = new Date(message.created_at).toLocaleTimeString([], { 
       hour: '2-digit', 
       minute: '2-digit' 
     });
-    messageEl.appendChild(timestampEl);
 
-    messagesContainer.appendChild(messageEl);
+    messageContainer.appendChild(messageEl);
+    messageContainer.appendChild(timestampEl);
+    messagesContainer.appendChild(messageContainer);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
