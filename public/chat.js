@@ -165,7 +165,7 @@ class BusinessChatPlugin {
     this.supabase
       .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
-        event: 'INSERT',
+        event: '*',
         schema: 'public',
         table: 'chat_messages',
         filter: `session_id=eq.${this.sessionId}`,
@@ -211,92 +211,6 @@ class BusinessChatPlugin {
     }
   }
 
-  async matchesRule(content, rule) {
-    const userContent = content.toLowerCase().trim();
-    const keywords = rule.keywords.map(k => k.toLowerCase().trim());
-    
-    switch (rule.match_type) {
-      case 'exact':
-        return keywords.some(keyword => userContent === keyword);
-      case 'fuzzy':
-        return keywords.some(keyword => userContent.includes(keyword));
-      case 'regex':
-        return keywords.some(keyword => {
-          try {
-            const regex = new RegExp(keyword, 'i');
-            return regex.test(content);
-          } catch (e) {
-            console.error('Invalid regex pattern:', keyword);
-            return false;
-          }
-        });
-      case 'synonym':
-        const words = userContent.split(/\s+/);
-        return keywords.some(keyword => words.includes(keyword));
-      default:
-        return false;
-    }
-  }
-
-  async checkRules(content) {
-    try {
-      // Check auto reply rules
-      const { data: autoRules } = await this.supabase
-        .from('auto_reply_rules')
-        .select('*')
-        .eq('user_id', this.userId);
-
-      if (autoRules && autoRules.length > 0) {
-        for (const rule of autoRules) {
-          if (await this.matchesRule(content, rule)) {
-            return { type: 'auto', response: rule.response };
-          }
-        }
-      }
-
-      // Check advanced reply rules
-      const { data: advancedRules } = await this.supabase
-        .from('advanced_reply_rules')
-        .select('*')
-        .eq('user_id', this.userId);
-
-      if (advancedRules && advancedRules.length > 0) {
-        for (const rule of advancedRules) {
-          if (await this.matchesRule(content, rule)) {
-            return { 
-              type: 'advanced', 
-              response: rule.response,
-              isHtml: rule.is_html 
-            };
-          }
-        }
-      }
-
-      // Check if AI is enabled
-      const { data: settings } = await this.supabase
-        .from('widget_settings')
-        .select('ai_enabled, ai_api_key')
-        .eq('user_id', this.userId)
-        .single();
-
-      if (settings?.ai_enabled && settings?.ai_api_key) {
-        return { type: 'ai' };
-      }
-
-      // If no rules match and AI is not enabled, return fallback message
-      return { 
-        type: 'bot', 
-        response: this.settings.fallbackMessage 
-      };
-    } catch (error) {
-      console.error('Error checking rules:', error);
-      return { 
-        type: 'bot', 
-        response: this.settings.fallbackMessage 
-      };
-    }
-  }
-
   async sendMessage(content, sender, isHtml = false) {
     try {
       if (!this.sessionId || !content.trim()) return;
@@ -326,44 +240,14 @@ class BusinessChatPlugin {
       this.renderMessage(data);
       this.messageQueue.add(data.id);
 
-      // If it's a user message, check for auto-replies
+      // Show typing indicator for user messages
       if (sender === 'user') {
         this.showTypingIndicator();
-        
-        const matchedRule = await this.checkRules(content);
-        
-        if (matchedRule) {
-          setTimeout(async () => {
-            if (matchedRule.type === 'ai') {
-              try {
-                const aiResponse = await this.getAIResponse(content);
-                await this.sendMessage(aiResponse, 'ai');
-              } catch (error) {
-                console.error('Error getting AI response:', error);
-                await this.sendMessage(this.settings.fallbackMessage, 'bot');
-              }
-            } else {
-              await this.sendMessage(
-                matchedRule.response,
-                matchedRule.type === 'advanced' ? 'ai' : 'bot',
-                matchedRule.isHtml || false
-              );
-            }
-            this.hideTypingIndicator();
-          }, 1000);
-        } else {
-          this.hideTypingIndicator();
-        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
       this.hideTypingIndicator();
     }
-  }
-
-  async getAIResponse(content) {
-    // Implement AI response logic here
-    return `AI Assistant: I understand your message about "${content}" and I'm here to help.`;
   }
 
   showTypingIndicator() {
