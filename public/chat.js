@@ -17,6 +17,7 @@ class BusinessChatPlugin {
     this.isTyping = false;
     this.typingTimeout = null;
     this.hasNewMessage = false;
+    this.messageQueue = new Set(); // Track message IDs to prevent duplicates
 
     this.init();
   }
@@ -94,7 +95,10 @@ class BusinessChatPlugin {
           primaryColor: settings.primary_color,
           secondaryColor: settings.secondary_color,
           welcomeMessage: settings.welcome_message,
-          fallbackMessage: settings.fallback_message
+          fallbackMessage: settings.fallback_message,
+          aiEnabled: settings.ai_enabled,
+          aiApiKey: settings.ai_api_key,
+          aiContext: settings.ai_context
         };
         this.updateWidgetStyles();
         this.updateWidgetContent();
@@ -139,7 +143,12 @@ class BusinessChatPlugin {
 
       if (messages) {
         this.messages = messages;
-        messages.forEach(message => this.renderMessage(message));
+        messages.forEach(message => {
+          if (!this.messageQueue.has(message.id)) {
+            this.renderMessage(message);
+            this.messageQueue.add(message.id);
+          }
+        });
       }
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -172,10 +181,12 @@ class BusinessChatPlugin {
 
   handleNewMessage(payload) {
     const message = payload.new;
-    if (message && message.sender !== 'user') {
+    if (message && !this.messageQueue.has(message.id)) {
       this.hideTypingIndicator();
       this.messages.push(message);
       this.renderMessage(message);
+      this.messageQueue.add(message.id);
+      
       if (!document.querySelector('.chat-window').classList.contains('open')) {
         this.hasNewMessage = true;
         this.updateNotificationIndicator();
@@ -257,7 +268,18 @@ class BusinessChatPlugin {
         }
       }
 
-      // If no rules match, return fallback message
+      // Check if AI is enabled
+      const { data: settings } = await this.supabase
+        .from('widget_settings')
+        .select('ai_enabled, ai_api_key')
+        .eq('user_id', this.userId)
+        .single();
+
+      if (settings?.ai_enabled && settings?.ai_api_key) {
+        return { type: 'ai' };
+      }
+
+      // If no rules match and AI is not enabled, return fallback message
       return { 
         type: 'bot', 
         response: this.settings.fallbackMessage 
@@ -292,14 +314,6 @@ class BusinessChatPlugin {
         return;
       }
 
-      // Then render the message
-      this.renderMessage({
-        content,
-        sender,
-        is_html: isHtml,
-        created_at: new Date().toISOString()
-      });
-
       // If it's a user message, check for auto-replies
       if (sender === 'user') {
         this.showTypingIndicator();
@@ -307,23 +321,44 @@ class BusinessChatPlugin {
         const matchedRule = await this.checkRules(content);
         
         if (matchedRule) {
-          setTimeout(() => {
-            this.sendMessage(
-              matchedRule.response,
-              matchedRule.type === 'advanced' ? 'ai' : 'bot',
-              matchedRule.isHtml || false
-            );
+          setTimeout(async () => {
+            if (matchedRule.type === 'ai') {
+              // Handle AI response
+              try {
+                const aiResponse = await this.getAIResponse(content);
+                await this.sendMessage(aiResponse, 'ai');
+              } catch (error) {
+                console.error('Error getting AI response:', error);
+                await this.sendMessage(this.settings.fallbackMessage, 'bot');
+              }
+            } else {
+              await this.sendMessage(
+                matchedRule.response,
+                matchedRule.type === 'advanced' ? 'ai' : 'bot',
+                matchedRule.isHtml || false
+              );
+            }
+            this.hideTypingIndicator();
           }, 1000);
+        } else {
+          this.hideTypingIndicator();
         }
       }
     } catch (error) {
       console.error('Error sending message:', error);
+      this.hideTypingIndicator();
     }
+  }
+
+  async getAIResponse(content) {
+    // Implement AI response logic here
+    // This is a placeholder - you would typically make an API call to your AI service
+    return `AI Assistant: I understand your message about "${content}" and I'm here to help.`;
   }
 
   showTypingIndicator() {
     const messagesContainer = document.querySelector('.chat-messages');
-    if (!messagesContainer) return;
+    if (!messagesContainer || this.isTyping) return;
 
     const typingIndicator = document.createElement('div');
     typingIndicator.className = 'typing-indicator';
@@ -682,10 +717,12 @@ class BusinessChatPlugin {
     chatWindow.innerHTML = `
       <div class="chat-header">
         <h3>${this.settings.businessName}</h3>
-        <p>
-          <span class="status-indicator"></span>
-          ${this.settings.representativeName}
-        </p>
+        <div class="flex items-center gap-2">
+          <p>
+            <span class="status-indicator"></span>
+            ${this.settings.representativeName}
+          </p>
+        </div>
       </div>
       <div class="chat-messages"></div>
       <div class="chat-input">
@@ -730,6 +767,8 @@ class BusinessChatPlugin {
   }
 
   renderMessage(message) {
+    if (!message || !message.content) return;
+    
     const messagesContainer = document.querySelector('.chat-messages');
     if (!messagesContainer) return;
 
