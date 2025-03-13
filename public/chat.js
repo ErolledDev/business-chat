@@ -17,30 +17,10 @@ class BusinessChatPlugin {
     this.isTyping = false;
     this.typingTimeout = null;
     this.hasNewMessage = false;
-    this.messageQueue = new Set(); // Track message IDs to prevent duplicates
-    this.welcomeMessageShown = false; // Track if welcome message has been shown
+    this.messageQueue = new Set();
+    this.welcomeMessageShown = false;
 
     this.init();
-  }
-
-  initSupabase() {
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-      script.onload = () => {
-        try {
-          this.supabase = window.supabase.createClient(
-            'https://sxnjvsdpdbnreophnzup.supabase.co',
-            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0'
-          );
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      };
-      script.onerror = (error) => reject(error);
-      document.head.appendChild(script);
-    });
   }
 
   async init() {
@@ -67,13 +47,36 @@ class BusinessChatPlugin {
     }
   }
 
+  initSupabase() {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      script.onload = () => {
+        try {
+          this.supabase = window.supabase.createClient(
+            'https://sxnjvsdpdbnreophnzup.supabase.co',
+            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0'
+          );
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      script.onerror = (error) => reject(error);
+      document.head.appendChild(script);
+    });
+  }
+
   showWelcomeMessage() {
     if (!this.welcomeMessageShown && this.messages.length === 0) {
-      this.renderMessage({
+      const welcomeMessage = {
+        id: 'welcome',
         content: this.settings.welcomeMessage,
         sender: 'bot',
         created_at: new Date().toISOString()
-      });
+      };
+      this.messages.push(welcomeMessage);
+      this.renderMessage(welcomeMessage);
       this.welcomeMessageShown = true;
     }
   }
@@ -140,7 +143,7 @@ class BusinessChatPlugin {
         .eq('session_id', this.sessionId)
         .order('created_at', { ascending: true });
 
-      if (messages) {
+      if (messages && messages.length > 0) {
         this.messages = messages;
         messages.forEach(message => {
           if (!this.messageQueue.has(message.id)) {
@@ -148,6 +151,8 @@ class BusinessChatPlugin {
             this.messageQueue.add(message.id);
           }
         });
+      } else {
+        this.showWelcomeMessage();
       }
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -296,15 +301,18 @@ class BusinessChatPlugin {
     try {
       if (!this.sessionId || !content.trim()) return;
 
-      // First save to database
+      // Create message object
+      const message = {
+        session_id: this.sessionId,
+        content,
+        sender,
+        is_html: isHtml
+      };
+
+      // Save to database
       const { data, error } = await this.supabase
         .from('chat_messages')
-        .insert({
-          session_id: this.sessionId,
-          content,
-          sender,
-          is_html: isHtml
-        })
+        .insert(message)
         .select()
         .single();
 
@@ -312,6 +320,11 @@ class BusinessChatPlugin {
         console.error('Error sending message:', error);
         return;
       }
+
+      // Add to local messages and render
+      this.messages.push(data);
+      this.renderMessage(data);
+      this.messageQueue.add(data.id);
 
       // If it's a user message, check for auto-replies
       if (sender === 'user') {
@@ -322,7 +335,6 @@ class BusinessChatPlugin {
         if (matchedRule) {
           setTimeout(async () => {
             if (matchedRule.type === 'ai') {
-              // Handle AI response
               try {
                 const aiResponse = await this.getAIResponse(content);
                 await this.sendMessage(aiResponse, 'ai');
@@ -351,7 +363,6 @@ class BusinessChatPlugin {
 
   async getAIResponse(content) {
     // Implement AI response logic here
-    // This is a placeholder - you would typically make an API call to your AI service
     return `AI Assistant: I understand your message about "${content}" and I'm here to help.`;
   }
 
