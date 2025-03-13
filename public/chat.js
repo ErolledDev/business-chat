@@ -519,7 +519,7 @@ class BusinessChatPlugin {
         position: fixed;
         bottom: 20px;
         right: 20px;
-        z-index: 9999;
+        z-index: 999999;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       }
 
@@ -588,6 +588,7 @@ class BusinessChatPlugin {
         display: none;
         flex-direction: column;
         overflow: hidden;
+        z-index: 999999;
       }
 
       .chat-window.open {
@@ -655,6 +656,7 @@ class BusinessChatPlugin {
         gap: 2px;
         max-width: 85%;
         margin-bottom: 12px;
+        width: 100%;
       }
 
       .message-group.user {
@@ -685,6 +687,7 @@ class BusinessChatPlugin {
         font-size: 0.95em;
         line-height: 1.4;
         max-width: 100%;
+        width: fit-content;
       }
 
       .message.user {
@@ -692,6 +695,7 @@ class BusinessChatPlugin {
         color: white;
         border-radius: 16px 16px 4px 16px;
         align-self: flex-end;
+        margin-left: auto;
       }
 
       .message.bot {
