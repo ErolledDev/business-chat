@@ -1,3 +1,17 @@
+class BusinessChatPlugin {
+  constructor(config) {
+    this.settings = {
+      businessName: 'My Business',
+      representativeName: 'Support Agent',
+      primaryColor: '#2563eb',
+      secondaryColor: '#1d4ed8',
+      isLive: false,
+    };
+
+    this.messages = [];
+    this.sessionId = null;
+    this.supabase = null;
+    this.userId = config.uid;
     this.isTyping = false;
     this.typingTimeout = null;
     this.hasNewMessage = false;
@@ -5,7 +19,92 @@
     this.init();
   }
 
+  async init() {
+    try {
+      // Create Supabase client
+      this.supabase = supabase.createClient(
+        'https://sxnjvsdpdbnreophnzup.supabase.co',
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0'
+      );
 
+      // Load settings
+      await this.loadSettings();
+
+      // Create widget
+      this.createWidget();
+
+      // Initialize chat session
+      await this.initSession();
+
+      // Load existing messages
+      await this.loadMessages();
+
+      // Initialize realtime subscriptions
+      this.initRealtime();
+    } catch (error) {
+      console.error('Error initializing chat widget:', error);
+    }
+  }
+
+  async loadSettings() {
+    try {
+      const { data: settings } = await this.supabase
+        .from('widget_settings')
+        .select('*')
+        .eq('user_id', this.userId)
+        .single();
+
+      if (settings) {
+        this.settings = {
+          ...this.settings,
+          businessName: settings.business_name,
+          representativeName: settings.representative_name,
+          primaryColor: settings.primary_color,
+          secondaryColor: settings.secondary_color,
+        };
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    }
+  }
+
+  async initSession() {
+    try {
+      const { data: session, error } = await this.supabase
+        .from('chat_sessions')
+        .insert({
+          user_id: this.userId,
+          visitor_id: this.generateVisitorId(),
+          status: 'active'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      this.sessionId = session.id;
+    } catch (error) {
+      console.error('Error initializing session:', error);
+    }
+  }
+
+  generateVisitorId() {
+    return 'visitor_' + Math.random().toString(36).substr(2, 9);
+  }
+
+  async loadMessages() {
+    try {
+      if (!this.sessionId) return;
+
+      const { data: messages } = await this.supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('session_id', this.sessionId)
+        .order('created_at', { ascending: true });
+
+      if (messages) {
+        this.messages = messages;
+        messages.forEach(message => this.renderMessage(message));
+      }
     } catch (error) {
       console.error('Error loading messages:', error);
     }
@@ -15,12 +114,6 @@
     if (!this.sessionId) return;
 
     this.supabase
-
-
-
-
-
-
       .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -30,11 +123,16 @@
       }, this.handleNewMessage.bind(this))
       .subscribe();
 
-
     this.supabase
       .channel(`chat_sessions:${this.sessionId}`)
       .on('postgres_changes', {
-
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'chat_sessions',
+        filter: `id=eq.${this.sessionId}`,
+      }, this.handleSessionUpdate.bind(this))
+      .subscribe();
+  }
 
   handleNewMessage(payload) {
     const message = payload.new;
@@ -45,30 +143,36 @@
       if (!document.querySelector('.chat-window').classList.contains('open')) {
         this.hasNewMessage = true;
         this.updateNotificationIndicator();
-
-
-
       }
     }
   }
+
+  handleSessionUpdate(payload) {
+    const session = payload.new;
+    if (session) {
+      // Update session status
+      if (session.status === 'closed') {
+        this.renderMessage({
+          content: 'Chat session ended',
+          sender: 'system',
+          created_at: new Date().toISOString()
+        });
+      }
+    }
   }
 
- matchesRule(content, rule) {
-    // Convert content and keywords to lowercase for case-insensitive matching
+  async matchesRule(content, rule) {
     const userContent = content.toLowerCase().trim();
     const keywords = rule.keywords.map(k => k.toLowerCase().trim());
     
     switch (rule.match_type) {
       case 'exact':
-        // Check if any keyword exactly matches the entire user content
         return keywords.some(keyword => userContent === keyword);
       
       case 'fuzzy':
-        // Check if any keyword is included in the user content
         return keywords.some(keyword => userContent.includes(keyword));
       
       case 'regex':
-        // Try to match using regular expressions
         return keywords.some(keyword => {
           try {
             const regex = new RegExp(keyword, 'i');
@@ -80,7 +184,6 @@
         });
       
       case 'synonym':
-        // Split user content into words and check if any keyword matches any word
         const words = userContent.split(/\s+/);
         return keywords.some(keyword => words.includes(keyword));
       
@@ -89,27 +192,119 @@
     }
   }
 
-      default:
-        return false;
-        if (error) {
-          console.error('Error sending message:', error);
-          // Fallback to local rendering if database insert fails
-          this.renderMessage({
-            content,
-            sender,
-            is_html: isHtml,
-            created_at: new Date().toISOString()
-          });
-          return;
-        }
+  async checkRules(content) {
+    try {
+      // Check auto reply rules
+      const { data: autoRules } = await this.supabase
+        .from('auto_reply_rules')
+        .select('*')
+        .eq('user_id', this.userId);
 
-        // Render the message from the database response
-        this.messages.push(data);
-        this.renderMessage(data);
+      if (autoRules) {
+        for (const rule of autoRules) {
+          if (await this.matchesRule(content, rule)) {
+            return { type: 'auto', response: rule.response };
+          }
+        }
+      }
+
+      // Check advanced reply rules
+      const { data: advancedRules } = await this.supabase
+        .from('advanced_reply_rules')
+        .select('*')
+        .eq('user_id', this.userId);
+
+      if (advancedRules) {
+        for (const rule of advancedRules) {
+          if (await this.matchesRule(content, rule)) {
+            return { 
+              type: 'advanced', 
+              response: rule.response,
+              isHtml: rule.is_html 
+            };
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error checking rules:', error);
+      return null;
+    }
+  }
+
+  async sendMessage(content, sender, isHtml = false) {
+    try {
+      if (!this.sessionId) return;
+
+      // First render the message locally
+      this.renderMessage({
+        content,
+        sender,
+        is_html: isHtml,
+        created_at: new Date().toISOString()
+      });
+
+      // Then save to database
+      const { data, error } = await this.supabase
+        .from('chat_messages')
+        .insert({
+          session_id: this.sessionId,
+          content,
+          sender,
+          is_html: isHtml
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error sending message:', error);
+        return;
+      }
+
+      // If it's a user message, check for auto-replies
+      if (sender === 'user') {
+        this.showTypingIndicator();
+        
+        const matchedRule = await this.checkRules(content);
+        
+        if (matchedRule) {
+          setTimeout(() => {
+            this.sendMessage(
+              matchedRule.response,
+              matchedRule.type === 'advanced' ? 'ai' : 'bot',
+              matchedRule.isHtml || false
+            );
+          }, 1000);
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
     }
+  }
+
+  showTypingIndicator() {
+    const messagesContainer = document.querySelector('.chat-messages');
+    if (!messagesContainer) return;
+
+    const typingIndicator = document.createElement('div');
+    typingIndicator.className = 'typing-indicator';
+    typingIndicator.innerHTML = `
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+    `;
+    messagesContainer.appendChild(typingIndicator);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.isTyping = true;
+  }
+
+  hideTypingIndicator() {
+    const typingIndicator = document.querySelector('.typing-indicator');
+    if (typingIndicator) {
+      typingIndicator.remove();
+    }
+    this.isTyping = false;
   }
 
   updateWidgetStyles() {
@@ -139,10 +334,8 @@
 
   updateNotificationIndicator() {
     const notificationDot = document.querySelector('.notification-dot');
-    if (this.hasNewMessage) {
-      notificationDot.style.display = 'block';
-    } else {
-      notificationDot.style.display = 'none';
+    if (notificationDot) {
+      notificationDot.style.display = this.hasNewMessage ? 'block' : 'none';
     }
   }
 

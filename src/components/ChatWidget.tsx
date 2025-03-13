@@ -1,6 +1,7 @@
 import React from 'react';
 import { MessageSquare, X, Send, Bot, UserCircle2, Wifi, WifiOff } from 'lucide-react';
 import { useChatStore } from '../store/chatStore';
+import { supabase } from '../lib/supabase';
 import DOMPurify from 'dompurify';
 
 export const ChatWidget: React.FC = () => {
@@ -34,30 +35,165 @@ export const ChatWidget: React.FC = () => {
     }
   }, [isOpen, messages.length, settings.welcomeMessage, addMessage]);
 
-  const handleSend = () => {
+  const checkAutoReplyRules = async (content: string) => {
+    try {
+      // First check auto reply rules
+      const { data: autoRules } = await supabase
+        .from('auto_reply_rules')
+        .select('*');
+
+      if (autoRules) {
+        for (const rule of autoRules) {
+          const matches = rule.keywords.some(keyword => {
+            switch (rule.match_type) {
+              case 'exact':
+                return content.toLowerCase() === keyword.toLowerCase();
+              case 'fuzzy':
+                return content.toLowerCase().includes(keyword.toLowerCase());
+              case 'regex':
+                try {
+                  return new RegExp(keyword, 'i').test(content);
+                } catch (e) {
+                  return false;
+                }
+              case 'synonym':
+                return content.toLowerCase().split(/\s+/).includes(keyword.toLowerCase());
+              default:
+                return false;
+            }
+          });
+
+          if (matches) {
+            return { type: 'auto', response: rule.response };
+          }
+        }
+      }
+
+      // Then check advanced reply rules
+      const { data: advancedRules } = await supabase
+        .from('advanced_reply_rules')
+        .select('*');
+
+      if (advancedRules) {
+        for (const rule of advancedRules) {
+          const matches = rule.keywords.some(keyword => {
+            switch (rule.match_type) {
+              case 'exact':
+                return content.toLowerCase() === keyword.toLowerCase();
+              case 'fuzzy':
+                return content.toLowerCase().includes(keyword.toLowerCase());
+              case 'regex':
+                try {
+                  return new RegExp(keyword, 'i').test(content);
+                } catch (e) {
+                  return false;
+                }
+              case 'synonym':
+                return content.toLowerCase().split(/\s+/).includes(keyword.toLowerCase());
+              default:
+                return false;
+            }
+          });
+
+          if (matches) {
+            return { type: 'advanced', response: rule.response, isHtml: rule.is_html };
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error checking rules:', error);
+      return null;
+    }
+  };
+
+  const handleSend = async () => {
     if (!input.trim()) return;
     
+    // Add user message
     addMessage({
       content: input,
       sender: 'user',
     });
 
-    // Simulate response based on operator mode
-    setTimeout(() => {
-      if (settings.operatorMode === 'auto') {
-        addMessage({
-          content: settings.fallbackMessage,
-          sender: 'bot',
-        });
-      } else if (settings.operatorMode === 'ai') {
-        addMessage({
-          content: 'AI Assistant: I understand your message and I\'m here to help.',
-          sender: 'ai',
-        });
-      }
-    }, 1000);
-
+    const userContent = input;
     setInput('');
+
+    // Check for matching rules
+    const matchedRule = await checkAutoReplyRules(userContent);
+
+    if (matchedRule) {
+      // If a rule matches, send the rule response
+      setTimeout(() => {
+        addMessage({
+          content: matchedRule.response,
+          sender: matchedRule.type === 'advanced' ? 'ai' : 'bot',
+          isHtml: matchedRule.isHtml,
+        });
+      }, 1000);
+    } else {
+      // If no rule matches, handle based on operator mode
+      setTimeout(() => {
+        switch (settings.operatorMode) {
+          case 'auto':
+            addMessage({
+              content: settings.fallbackMessage,
+              sender: 'bot',
+            });
+            break;
+          case 'ai':
+            addMessage({
+              content: 'AI Assistant: I understand your message and I\'m here to help.',
+              sender: 'ai',
+            });
+            break;
+          case 'live':
+            // For live mode, create a chat session if it doesn't exist
+            createOrUpdateChatSession(userContent);
+            break;
+        }
+      }, 1000);
+    }
+  };
+
+  const createOrUpdateChatSession = async (content: string) => {
+    try {
+      // Create or get session
+      const { data: session, error: sessionError } = await supabase
+        .from('chat_sessions')
+        .insert({
+          visitor_id: 'anonymous', // You might want to generate a unique ID
+          status: 'active'
+        })
+        .select()
+        .single();
+
+      if (sessionError) throw sessionError;
+
+      // Add message to the session
+      const { error: messageError } = await supabase
+        .from('chat_messages')
+        .insert({
+          session_id: session.id,
+          content: content,
+          sender: 'user'
+        });
+
+      if (messageError) throw messageError;
+
+      // Add a response indicating the message was received
+      addMessage({
+        content: 'Message received. An agent will respond shortly.',
+        sender: 'bot',
+      });
+    } catch (error) {
+      console.error('Error creating chat session:', error);
+      addMessage({
+        content: 'Sorry, there was an error sending your message.',
+        sender: 'bot',
+      });
+    }
   };
 
   const handleQuickAction = (message: string) => {
@@ -153,9 +289,9 @@ export const ChatWidget: React.FC = () => {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => (
+        {messages.map((message, index) => (
           <div
-            key={message.id}
+            key={`${message.id || index}`}
             className={`flex ${
               message.sender === 'user' ? 'justify-end' : 'justify-start'
             }`}
@@ -166,6 +302,8 @@ export const ChatWidget: React.FC = () => {
                   ? 'bg-blue-500 text-white rounded-tr-none'
                   : message.sender === 'ai'
                   ? 'bg-purple-100 text-purple-900 rounded-tl-none'
+                  : message.sender === 'agent'
+                  ? 'bg-green-100 text-green-900 rounded-tl-none'
                   : 'bg-gray-100 text-gray-800 rounded-tl-none'
               }`}
             >
