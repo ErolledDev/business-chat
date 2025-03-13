@@ -74,26 +74,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })) || []
       });
 
-      // Load settings
-      const { data: settings, error: settingsError } = await supabase
-        .from('widget_settings')
-        .select('*')
-        .single();
+      // Subscribe to new messages
+      const subscription = supabase
+        .channel('chat_messages')
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: `session_id=eq.${sessionId}`
+        }, (payload) => {
+          const newMessage = {
+            id: payload.new.id,
+            content: payload.new.content,
+            sender: payload.new.sender,
+            timestamp: new Date(payload.new.created_at),
+            isHtml: payload.new.is_html
+          };
+          set(state => ({
+            messages: [...state.messages, newMessage],
+            settings: {
+              ...state.settings,
+              hasUnreadMessages: payload.new.sender !== 'user'
+            }
+          }));
+        })
+        .subscribe();
 
-      if (settings && !settingsError) {
-        set(state => ({
-          settings: {
-            ...state.settings,
-            businessName: settings.business_name,
-            representativeName: settings.representative_name,
-            primaryColor: settings.primary_color,
-            secondaryColor: settings.secondary_color,
-            welcomeMessage: settings.welcome_message,
-            fallbackMessage: settings.fallback_message,
-            aiModeEnabled: settings.ai_enabled
-          }
-        }));
-      }
+      return () => {
+        subscription.unsubscribe();
+      };
     } catch (error) {
       console.error('Error initializing chat:', error);
       toast.error('Failed to initialize chat');
@@ -191,22 +200,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         }
 
-        // If no rule matches, check AI mode
-        if (!response) {
-          const { data: settings } = await supabase
-            .from('widget_settings')
-            .select('ai_enabled, ai_context')
-            .single();
-
-          if (settings?.ai_enabled) {
-            response = {
-              content: await getAIResponse(content, settings.ai_context),
-              sender: 'ai' as const,
-              isHtml: false
-            };
-          }
-        }
-
         // Remove typing indicator
         set(state => ({
           messages: state.messages.filter(m => m.id !== 'typing')
@@ -216,14 +209,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (response) {
           setTimeout(() => {
             get().addMessage(response!);
-          }, 1000);
-        } else {
-          // Send fallback message
-          setTimeout(() => {
-            get().addMessage({
-              content: get().settings.fallbackMessage,
-              sender: 'bot'
-            });
           }, 1000);
         }
       }
@@ -277,7 +262,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   }
 }));
 
-// Helper functions
+// Helper function
 function matchesRule(content: string, rule: any): boolean {
   const keywords = rule.keywords.map((k: string) => k.toLowerCase());
 
@@ -300,10 +285,4 @@ function matchesRule(content: string, rule: any): boolean {
     default:
       return false;
   }
-}
-
-async function getAIResponse(content: string, context?: string): Promise<string> {
-  // For now, return a simple AI response
-  // In production, this would integrate with an actual AI service
-  return `AI: I understand your message about "${content}". How can I help you further?`;
 }
