@@ -8,18 +8,25 @@ export const ChatWidget: React.FC = () => {
     messages, 
     settings, 
     isOpen, 
+    loading,
     toggleWidget, 
     addMessage,
-    clearMessages
+    clearMessages,
+    initializeChat
   } = useChatStore();
   
   const [input, setInput] = React.useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [showTypingIndicator, setShowTypingIndicator] = React.useState(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  useEffect(() => {
+    if (isOpen) {
+      initializeChat();
+    }
+  }, [isOpen, initializeChat]);
 
   useEffect(() => {
     scrollToBottom();
@@ -34,18 +41,12 @@ export const ChatWidget: React.FC = () => {
   const handleSend = async () => {
     if (!input.trim()) return;
     
-    addMessage({
+    await addMessage({
       content: input,
       sender: 'user',
     });
 
     setInput('');
-    setShowTypingIndicator(true);
-
-    // Hide typing indicator after response
-    setTimeout(() => {
-      setShowTypingIndicator(false);
-    }, 2000);
   };
 
   if (!isOpen) {
@@ -83,53 +84,56 @@ export const ChatWidget: React.FC = () => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[400px] max-h-[500px] bg-gray-50">
-        {messages.map((message, index) => (
-          <div
-            key={message.id || index}
-            className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`max-w-[80%] p-3 rounded-lg ${
-                message.sender === 'user'
-                  ? `text-white rounded-br-none`
-                  : message.sender === 'ai'
-                  ? 'bg-purple-100 text-purple-900 rounded-bl-none'
-                  : 'bg-white text-gray-900 rounded-bl-none'
-              }`}
-              style={message.sender === 'user' ? { backgroundColor: settings.primaryColor } : {}}
-            >
-              {message.isHtml ? (
+        {loading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+          </div>
+        ) : (
+          <>
+            {messages.map((message, index) => (
+              <div
+                key={message.id || index}
+                className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
                 <div
-                  dangerouslySetInnerHTML={{
-                    __html: DOMPurify.sanitize(message.content)
-                  }}
-                />
-              ) : (
-                <p>{message.content}</p>
-              )}
-              <div className="text-xs mt-1 opacity-70">
-                {message.timestamp.toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}
+                  className={`max-w-[80%] p-3 rounded-lg ${
+                    message.sender === 'user'
+                      ? `text-white rounded-br-none`
+                      : message.sender === 'ai'
+                      ? 'bg-purple-100 text-purple-900 rounded-bl-none'
+                      : 'bg-white text-gray-900 rounded-bl-none'
+                  }`}
+                  style={message.sender === 'user' ? { backgroundColor: settings.primaryColor } : {}}
+                >
+                  {message.isTyping ? (
+                    <div className="flex space-x-2">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                    </div>
+                  ) : message.isHtml ? (
+                    <div
+                      dangerouslySetInnerHTML={{
+                        __html: DOMPurify.sanitize(message.content)
+                      }}
+                    />
+                  ) : (
+                    <p>{message.content}</p>
+                  )}
+                  {!message.isTyping && (
+                    <div className="text-xs mt-1 opacity-70">
+                      {message.timestamp.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
-
-        {showTypingIndicator && (
-          <div className="flex justify-start">
-            <div className="bg-white p-3 rounded-lg rounded-bl-none shadow-sm">
-              <div className="flex space-x-2">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
-              </div>
-            </div>
-          </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </>
         )}
-        
-        <div ref={messagesEndRef} />
       </div>
 
       <div className="p-4 border-t bg-white">
