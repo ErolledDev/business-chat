@@ -53,36 +53,41 @@
   }
   }
 
-  matchesRule(content, rule) {
-    // Convert content to lowercase for case-insensitive matching
+ matchesRule(content, rule) {
+    // Convert content and keywords to lowercase for case-insensitive matching
     const userContent = content.toLowerCase().trim();
-
-
+    const keywords = rule.keywords.map(k => k.toLowerCase().trim());
+    
     switch (rule.match_type) {
       case 'exact':
         // Check if any keyword exactly matches the entire user content
-        return rule.keywords.some(keyword => 
-          userContent === keyword.toLowerCase().trim()
-        );
-
+        return keywords.some(keyword => userContent === keyword);
+      
       case 'fuzzy':
         // Check if any keyword is included in the user content
-        return rule.keywords.some(keyword =>
-          userContent.includes(keyword.toLowerCase().trim())
-        );
-
+        return keywords.some(keyword => userContent.includes(keyword));
+      
       case 'regex':
         // Try to match using regular expressions
-        return rule.keywords.some(keyword => {
+        return keywords.some(keyword => {
           try {
             const regex = new RegExp(keyword, 'i');
             return regex.test(content);
+          } catch (e) {
+            console.error('Invalid regex pattern:', keyword);
+            return false;
+          }
+        });
+      
       case 'synonym':
         // Split user content into words and check if any keyword matches any word
         const words = userContent.split(/\s+/);
-        return rule.keywords.some(keyword => 
-          words.includes(keyword.toLowerCase().trim())
-        );
+        return keywords.some(keyword => words.includes(keyword));
+      
+      default:
+        return false;
+    }
+  }
 
       default:
         return false;
