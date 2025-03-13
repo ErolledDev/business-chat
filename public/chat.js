@@ -1,230 +1,11 @@
-// Business Chat Widget
-class BusinessChatPlugin {
-  constructor(config) {
-    if (!config.uid) {
-      throw new Error('User ID (uid) is required');
-    }
-    
-    this.config = config;
-    this.supabaseUrl = 'https://sxnjvsdpdbnreophnzup.supabase.co';
-    this.supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0';
-    this.sessionId = null;
-    this.messages = [];
-    this.settings = {
-      businessName: 'Business Chat',
-      representativeName: 'Support Agent',
-      primaryColor: '#2563eb',
-      secondaryColor: '#1d4ed8',
-      welcomeMessage: 'Welcome! How can we help you today?',
-      fallbackMessage: "We'll get back to you soon!",
-      aiEnabled: false,
-      aiModel: null,
-      aiContext: null,
-      isLive: false
-    };
-    this.autoRules = [];
-    this.advancedRules = [];
     this.isTyping = false;
     this.typingTimeout = null;
     this.hasNewMessage = false;
-    this.messageSubscription = null;
+
     this.init();
   }
 
-  async init() {
-    try {
-      await this.initSupabase();
-      await this.loadSettings();
-      await this.loadRules();
-      this.createWidget();
-      await this.createChatSession();
-      this.initRealtime();
-      this.initialized = true;
-    } catch (error) {
-      console.error('Initialization error:', error);
-      this.createWidget();
-    }
-  }
 
-  async initSupabase() {
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-    script.async = true;
-    await new Promise((resolve) => {
-      script.onload = resolve;
-      document.head.appendChild(script);
-    });
-
-    this.supabase = supabase.createClient(this.supabaseUrl, this.supabaseKey);
-  }
-
-  async loadSettings() {
-    try {
-      const { data, error } = await this.supabase
-        .from('widget_settings')
-        .select('*')
-        .eq('user_id', this.config.uid)
-        .single();
-
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error loading settings:', error);
-        return;
-      }
-
-      if (data) {
-        this.settings = {
-          businessName: data.business_name || this.settings.businessName,
-          representativeName: data.representative_name || this.settings.representativeName,
-          primaryColor: data.primary_color || this.settings.primaryColor,
-          secondaryColor: data.secondary_color || this.settings.secondaryColor,
-          welcomeMessage: data.welcome_message || this.settings.welcomeMessage,
-          fallbackMessage: data.fallback_message || this.settings.fallbackMessage,
-          aiEnabled: data.ai_enabled || false,
-          aiModel: data.ai_model,
-          aiContext: data.ai_context,
-          isLive: false
-        };
-
-        this.updateWidgetStyles();
-        this.updateWidgetContent();
-      }
-
-      // Subscribe to settings changes
-      this.supabase
-        .channel(`widget_settings:${this.config.uid}`)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'widget_settings',
-          filter: `user_id=eq.${this.config.uid}`,
-        }, (payload) => {
-          const newData = payload.new;
-          if (newData) {
-            this.settings = {
-              businessName: newData.business_name || this.settings.businessName,
-              representativeName: newData.representative_name || this.settings.representativeName,
-              primaryColor: newData.primary_color || this.settings.primaryColor,
-              secondaryColor: newData.secondary_color || this.settings.secondaryColor,
-              welcomeMessage: newData.welcome_message || this.settings.welcomeMessage,
-              fallbackMessage: newData.fallback_message || this.settings.fallbackMessage,
-              aiEnabled: newData.ai_enabled || false,
-              aiModel: newData.ai_model,
-              aiContext: newData.ai_context,
-              isLive: this.settings.isLive
-            };
-            this.updateWidgetStyles();
-            this.updateWidgetContent();
-          }
-        })
-        .subscribe();
-
-    } catch (error) {
-      console.error('Error loading settings:', error);
-    }
-  }
-
-  async loadRules() {
-    try {
-      const [autoRules, advancedRules] = await Promise.all([
-        this.supabase
-          .from('auto_reply_rules')
-          .select('*')
-          .eq('user_id', this.config.uid),
-        this.supabase
-          .from('advanced_reply_rules')
-          .select('*')
-          .eq('user_id', this.config.uid)
-      ]);
-
-      if (!autoRules.error) {
-        this.autoRules = autoRules.data || [];
-      }
-
-      if (!advancedRules.error) {
-        this.advancedRules = advancedRules.data || [];
-      }
-
-      // Subscribe to rules changes
-      this.supabase
-        .channel(`rules_changes:${this.config.uid}`)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'auto_reply_rules',
-          filter: `user_id=eq.${this.config.uid}`,
-        }, () => this.loadRules())
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'advanced_reply_rules',
-          filter: `user_id=eq.${this.config.uid}`,
-        }, () => this.loadRules())
-        .subscribe();
-    } catch (error) {
-      console.error('Error loading rules:', error);
-    }
-  }
-
-  async createChatSession() {
-    try {
-      const visitorId = localStorage.getItem('visitorId') || crypto.randomUUID();
-      localStorage.setItem('visitorId', visitorId);
-
-      const { data, error } = await this.supabase
-        .from('chat_sessions')
-        .insert({
-          user_id: this.config.uid,
-          visitor_id: visitorId,
-          status: 'active'
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error creating chat session:', error);
-        return;
-      }
-
-      this.sessionId = data.id;
-
-      // Load existing messages first
-      await this.loadMessages();
-
-      // Show welcome message immediately if no messages exist
-      if (this.messages.length === 0) {
-        this.showTypingIndicator();
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await this.sendMessage(this.settings.welcomeMessage, 'bot');
-        this.hideTypingIndicator();
-        this.hasNewMessage = true;
-        this.updateNotificationIndicator();
-      }
-    } catch (error) {
-      console.error('Error creating chat session:', error);
-    }
-  }
-
-  async loadMessages() {
-    if (!this.sessionId) return;
-
-    try {
-      const { data, error } = await this.supabase
-        .from('chat_messages')
-        .select('*')
-        .eq('session_id', this.sessionId)
-        .order('created_at', { ascending: true });
-
-      if (error) {
-        console.error('Error loading messages:', error);
-        return;
-      }
-
-      this.messages = data || [];
-      const messagesContainer = document.querySelector('.chat-messages');
-      if (messagesContainer) {
-        messagesContainer.innerHTML = ''; // Clear existing messages
-        this.messages.forEach(message => this.renderMessage(message));
-      }
     } catch (error) {
       console.error('Error loading messages:', error);
     }
@@ -233,13 +14,13 @@ class BusinessChatPlugin {
   initRealtime() {
     if (!this.sessionId) return;
 
-    // Clean up existing subscription if any
-    if (this.messageSubscription) {
-      this.messageSubscription.unsubscribe();
-    }
+    this.supabase
 
-    // Subscribe to new messages
-    this.messageSubscription = this.supabase
+
+
+
+
+
       .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -249,240 +30,77 @@ class BusinessChatPlugin {
       }, this.handleNewMessage.bind(this))
       .subscribe();
 
-    // Subscribe to session updates
+
     this.supabase
       .channel(`chat_sessions:${this.sessionId}`)
       .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'chat_sessions',
-        filter: `id=eq.${this.sessionId}`,
-      }, this.handleSessionUpdate.bind(this))
-      .subscribe();
-  }
+
 
   handleNewMessage(payload) {
     const message = payload.new;
-    if (message && message.session_id === this.sessionId) {
+    if (message) {
       this.hideTypingIndicator();
-      // Only add the message if it's not already in the messages array
-      if (!this.messages.some(m => m.id === message.id)) {
-        this.messages.push(message);
-        this.renderMessage(message);
-        if (!document.querySelector('.chat-window').classList.contains('open')) {
-          this.hasNewMessage = true;
-          this.updateNotificationIndicator();
-        }
+      this.messages.push(message);
+      this.renderMessage(message);
+      if (!document.querySelector('.chat-window').classList.contains('open')) {
+        this.hasNewMessage = true;
+        this.updateNotificationIndicator();
+
+
+
       }
     }
   }
-
-  handleSessionUpdate(payload) {
-    const session = payload.new;
-    if (session.status === 'active' && payload.old.status !== 'active') {
-      this.settings.isLive = true;
-      this.addSystemMessage('An agent has joined the chat.');
-      this.updateWidgetContent();
-    } else if (session.status === 'closed' && payload.old.status !== 'closed') {
-      this.settings.isLive = false;
-      this.addSystemMessage('Chat session has ended.');
-      this.updateWidgetContent();
-    }
-  }
-
-  addSystemMessage(content) {
-    const messageEl = document.createElement('div');
-    messageEl.className = 'message system';
-    messageEl.textContent = content;
-    const messagesContainer = document.querySelector('.chat-messages');
-    if (messagesContainer) {
-      messagesContainer.appendChild(messageEl);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
-  }
-
-  showTypingIndicator() {
-    if (this.isTyping) return;
-    this.isTyping = true;
-
-    const messagesContainer = document.querySelector('.chat-messages');
-    if (!messagesContainer) return;
-
-    const typingIndicator = document.createElement('div');
-    typingIndicator.className = 'typing-indicator';
-    typingIndicator.innerHTML = `
-      <div class="typing-dot"></div>
-      <div class="typing-dot"></div>
-      <div class="typing-dot"></div>
-    `;
-    messagesContainer.appendChild(typingIndicator);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  }
-
-  hideTypingIndicator() {
-    this.isTyping = false;
-    const typingIndicator = document.querySelector('.typing-indicator');
-    if (typingIndicator) {
-      typingIndicator.remove();
-    }
-  }
-
-  async processAutoReply(content) {
-    const userContent = content.toLowerCase();
-
-    // First check advanced rules (they take precedence)
-    for (const rule of this.advancedRules) {
-      if (this.matchesRule(userContent, rule)) {
-        await this.showTypingIndicator();
-        return new Promise(resolve => {
-          setTimeout(async () => {
-            await this.sendMessage(rule.response, 'bot', rule.is_html);
-            this.hideTypingIndicator();
-            resolve(true);
-          }, 1500);
-        });
-      }
-    }
-
-    // Then check auto reply rules
-    for (const rule of this.autoRules) {
-      if (this.matchesRule(userContent, rule)) {
-        await this.showTypingIndicator();
-        return new Promise(resolve => {
-          setTimeout(async () => {
-            await this.sendMessage(rule.response, 'bot');
-            this.hideTypingIndicator();
-            resolve(true);
-          }, 1500);
-        });
-      }
-    }
-
-    // If AI is enabled and no rules matched
-    if (this.settings.aiEnabled && this.settings.aiModel) {
-      await this.showTypingIndicator();
-      return new Promise(resolve => {
-        setTimeout(async () => {
-          await this.sendMessage("AI is processing your request...", 'ai');
-          this.hideTypingIndicator();
-          resolve(true);
-        }, 1500);
-      });
-    }
-
-    // If in live mode and no rules matched
-    if (this.settings.isLive) {
-      await this.showTypingIndicator();
-      return new Promise(resolve => {
-        setTimeout(async () => {
-          await this.sendMessage("An agent will respond shortly...", 'agent');
-          this.hideTypingIndicator();
-          resolve(true);
-        }, 1500);
-      });
-    }
-
-    // If no rules matched and not in live mode, show fallback message
-    await this.showTypingIndicator();
-    return new Promise(resolve => {
-      setTimeout(async () => {
-        await this.sendMessage(this.settings.fallbackMessage, 'bot');
-        this.hideTypingIndicator();
-        resolve(true);
-      }, 1500);
-    });
   }
 
   matchesRule(content, rule) {
-    // Convert content and keywords to lowercase for case-insensitive matching
+    // Convert content to lowercase for case-insensitive matching
     const userContent = content.toLowerCase().trim();
-    const keywords = rule.keywords.map(k => k.toLowerCase().trim());
-    
+
+
     switch (rule.match_type) {
       case 'exact':
         // Check if any keyword exactly matches the entire user content
-        return keywords.some(keyword => userContent === keyword);
-      
+        return rule.keywords.some(keyword => 
+          userContent === keyword.toLowerCase().trim()
+        );
+
       case 'fuzzy':
         // Check if any keyword is included in the user content
-        return keywords.some(keyword => userContent.includes(keyword));
-      
+        return rule.keywords.some(keyword =>
+          userContent.includes(keyword.toLowerCase().trim())
+        );
+
       case 'regex':
         // Try to match using regular expressions
-        return keywords.some(keyword => {
+        return rule.keywords.some(keyword => {
           try {
             const regex = new RegExp(keyword, 'i');
             return regex.test(content);
-          } catch (e) {
-            console.error('Invalid regex pattern:', keyword);
-            return false;
-          }
-        });
-      
       case 'synonym':
         // Split user content into words and check if any keyword matches any word
         const words = userContent.split(/\s+/);
-        return keywords.some(keyword => words.includes(keyword));
-      
+        return rule.keywords.some(keyword => 
+          words.includes(keyword.toLowerCase().trim())
+        );
+
       default:
         return false;
-    }
-  }
-
-  async sendMessage(content, sender, isHtml = false) {
-    if (!this.sessionId) {
-      console.error('No active chat session');
-      return;
-    }
-
-    try {
-      if (sender === 'user') {
-        // Immediately render user message
-        const userMessage = {
-          content,
-          sender,
-          is_html: isHtml,
-          created_at: new Date().toISOString()
-        };
-        this.messages.push(userMessage);
-        this.renderMessage(userMessage);
-
-        // Save to database
-        const { error: saveError } = await this.supabase
-          .from('chat_messages')
-          .insert({
-            session_id: this.sessionId,
-            content,
-            sender,
-            is_html: isHtml,
-          });
-
-        if (saveError) {
-          console.error('Error saving user message:', saveError);
-          return;
-        }
-
-        // Process the message through rules
-        await this.processAutoReply(content);
-      } else {
-        // For bot/ai/agent messages
-        const { data, error } = await this.supabase
-          .from('chat_messages')
-          .insert({
-            session_id: this.sessionId,
-            content,
-            sender,
-            is_html: isHtml,
-          })
-          .select()
-          .single();
-
         if (error) {
           console.error('Error sending message:', error);
+          // Fallback to local rendering if database insert fails
+          this.renderMessage({
+            content,
+            sender,
+            is_html: isHtml,
+            created_at: new Date().toISOString()
+          });
           return;
         }
 
-        // Message will be rendered through the realtime subscription
+        // Render the message from the database response
+        this.messages.push(data);
+        this.renderMessage(data);
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -500,7 +118,7 @@ class BusinessChatPlugin {
     const headerTitle = document.querySelector('#business-chat-widget .chat-header h3');
     const headerSubtitle = document.querySelector('#business-chat-widget .chat-header p');
     const statusIndicator = document.querySelector('#business-chat-widget .chat-header .status-indicator');
-    
+
     if (headerTitle) {
       headerTitle.textContent = this.settings.businessName;
     }
@@ -880,7 +498,7 @@ class BusinessChatPlugin {
 
     const messageEl = document.createElement('div');
     messageEl.className = `message ${message.sender}`;
-    
+
     if (message.is_html) {
       // Sanitize HTML content before rendering
       const tempDiv = document.createElement('div');
