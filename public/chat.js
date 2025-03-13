@@ -232,6 +232,7 @@ class BusinessChatPlugin {
   initRealtime() {
     if (!this.sessionId) return;
 
+    // Subscribe to new messages
     this.supabase
       .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
@@ -239,9 +240,22 @@ class BusinessChatPlugin {
         schema: 'public',
         table: 'chat_messages',
         filter: `session_id=eq.${this.sessionId}`,
-      }, this.handleNewMessage.bind(this))
+      }, (payload) => {
+        const message = payload.new;
+        if (message && message.sender !== 'user') {
+          // Only handle non-user messages from realtime updates
+          this.hideTypingIndicator();
+          this.messages.push(message);
+          this.renderMessage(message);
+          if (!document.querySelector('.chat-window').classList.contains('open')) {
+            this.hasNewMessage = true;
+            this.updateNotificationIndicator();
+          }
+        }
+      })
       .subscribe();
 
+    // Subscribe to session status changes
     this.supabase
       .channel(`chat_sessions:${this.sessionId}`)
       .on('postgres_changes', {
@@ -249,71 +263,19 @@ class BusinessChatPlugin {
         schema: 'public',
         table: 'chat_sessions',
         filter: `id=eq.${this.sessionId}`,
-      }, this.handleSessionUpdate.bind(this))
+      }, (payload) => {
+        const session = payload.new;
+        if (session.status === 'active' && payload.old.status !== 'active') {
+          this.settings.isLive = true;
+          this.addSystemMessage('An agent has joined the chat.');
+          this.updateWidgetContent();
+        } else if (session.status === 'closed' && payload.old.status !== 'closed') {
+          this.settings.isLive = false;
+          this.addSystemMessage('Chat session has ended.');
+          this.updateWidgetContent();
+        }
+      })
       .subscribe();
-  }
-
-  handleNewMessage(payload) {
-    const message = payload.new;
-    if (message) {
-      this.hideTypingIndicator();
-      this.messages.push(message);
-      this.renderMessage(message);
-      if (!document.querySelector('.chat-window').classList.contains('open')) {
-        this.hasNewMessage = true;
-        this.updateNotificationIndicator();
-      }
-    }
-  }
-
-  handleSessionUpdate(payload) {
-    const session = payload.new;
-    if (session.status === 'active' && payload.old.status !== 'active') {
-      this.settings.isLive = true;
-      this.addSystemMessage('An agent has joined the chat.');
-      this.updateWidgetContent();
-    } else if (session.status === 'closed' && payload.old.status !== 'closed') {
-      this.settings.isLive = false;
-      this.addSystemMessage('Chat session has ended.');
-      this.updateWidgetContent();
-    }
-  }
-
-  addSystemMessage(content) {
-    const messageEl = document.createElement('div');
-    messageEl.className = 'message system';
-    messageEl.textContent = content;
-    const messagesContainer = document.querySelector('.chat-messages');
-    if (messagesContainer) {
-      messagesContainer.appendChild(messageEl);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
-  }
-
-  showTypingIndicator() {
-    if (this.isTyping) return;
-    this.isTyping = true;
-
-    const messagesContainer = document.querySelector('.chat-messages');
-    if (!messagesContainer) return;
-
-    const typingIndicator = document.createElement('div');
-    typingIndicator.className = 'typing-indicator';
-    typingIndicator.innerHTML = `
-      <div class="typing-dot"></div>
-      <div class="typing-dot"></div>
-      <div class="typing-dot"></div>
-    `;
-    messagesContainer.appendChild(typingIndicator);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  }
-
-  hideTypingIndicator() {
-    this.isTyping = false;
-    const typingIndicator = document.querySelector('.typing-indicator');
-    if (typingIndicator) {
-      typingIndicator.remove();
-    }
   }
 
   async processAutoReply(content) {
@@ -483,13 +445,157 @@ class BusinessChatPlugin {
           return;
         }
 
-        // Render the message from the database response
-        this.messages.push(data);
-        this.renderMessage(data);
+        // Only render non-user messages if they're not from realtime updates
+        if (sender === 'user') {
+          this.messages.push(data);
+          this.renderMessage(data);
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
     }
+  }
+
+  addSystemMessage(content) {
+    const messageEl = document.createElement('div');
+    messageEl.className = 'message system';
+    messageEl.textContent = content;
+    const messagesContainer = document.querySelector('.chat-messages');
+    if (messagesContainer) {
+      messagesContainer.appendChild(messageEl);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  }
+
+  showTypingIndicator() {
+    if (this.isTyping) return;
+    this.isTyping = true;
+
+    const messagesContainer = document.querySelector('.chat-messages');
+    if (!messagesContainer) return;
+
+    const typingIndicator = document.createElement('div');
+    typingIndicator.className = 'typing-indicator';
+    typingIndicator.innerHTML = `
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+    `;
+    messagesContainer.appendChild(typingIndicator);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  hideTypingIndicator() {
+    this.isTyping = false;
+    const typingIndicator = document.querySelector('.typing-indicator');
+    if (typingIndicator) {
+      typingIndicator.remove();
+    }
+  }
+
+  createWidget() {
+    const container = document.createElement('div');
+    container.id = 'business-chat-widget';
+    document.body.appendChild(container);
+
+    const styles = document.createElement('style');
+    styles.id = 'business-chat-widget-styles';
+    styles.textContent = this.getStyles();
+    document.head.appendChild(styles);
+
+    const button = document.createElement('div');
+    button.className = 'chat-button';
+    button.innerHTML = `
+      <div class="notification-dot"></div>
+      <svg class="chat-icon" viewBox="0 0 24 24">
+        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+      </svg>
+    `;
+    container.appendChild(button);
+
+    const chatWindow = document.createElement('div');
+    chatWindow.className = 'chat-window';
+    chatWindow.innerHTML = `
+      <div class="chat-header">
+        <h3>${this.settings.businessName}</h3>
+        <p>
+          <span class="status-indicator"></span>
+          ${this.settings.representativeName}
+        </p>
+      </div>
+      <div class="chat-messages"></div>
+      <div class="chat-input">
+        <input type="text" placeholder="Type your message...">
+        <button>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    `;
+    container.appendChild(chatWindow);
+
+    button.addEventListener('click', () => {
+      chatWindow.classList.toggle('open');
+      if (chatWindow.classList.contains('open')) {
+        chatWindow.querySelector('input').focus();
+        this.hasNewMessage = false;
+        this.updateNotificationIndicator();
+      }
+    });
+
+    const input = chatWindow.querySelector('input');
+    const sendButton = chatWindow.querySelector('button');
+
+    const sendMessage = () => {
+      const content = input.value.trim();
+      if (content) {
+        this.sendMessage(content, 'user');
+        input.value = '';
+      }
+    };
+
+    sendButton.addEventListener('click', sendMessage);
+    input.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        sendMessage();
+      }
+    });
+  }
+
+  renderMessage(message) {
+    const messagesContainer = document.querySelector('.chat-messages');
+    if (!messagesContainer) return;
+
+    const messageEl = document.createElement('div');
+    messageEl.className = `message ${message.sender}`;
+    
+    if (message.is_html) {
+      // Sanitize HTML content before rendering
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = message.content;
+      // Remove any script tags
+      const scripts = tempDiv.getElementsByTagName('script');
+      for (let i = scripts.length - 1; i >= 0; i--) {
+        scripts[i].remove();
+      }
+      messageEl.innerHTML = tempDiv.innerHTML;
+    } else {
+      messageEl.textContent = message.content;
+    }
+
+    // Add timestamp
+    const timestampEl = document.createElement('div');
+    timestampEl.className = 'text-xs text-gray-500 mt-1';
+    timestampEl.textContent = new Date(message.created_at).toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    messageEl.appendChild(timestampEl);
+
+    messagesContainer.appendChild(messageEl);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 
   updateWidgetStyles() {
@@ -804,111 +910,6 @@ class BusinessChatPlugin {
         background: #94a3b8;
       }
     `;
-  }
-
-  createWidget() {
-    const container = document.createElement('div');
-    container.id = 'business-chat-widget';
-    document.body.appendChild(container);
-
-    const styles = document.createElement('style');
-    styles.id = 'business-chat-widget-styles';
-    styles.textContent = this.getStyles();
-    document.head.appendChild(styles);
-
-    const button = document.createElement('div');
-    button.className = 'chat-button';
-    button.innerHTML = `
-      <div class="notification-dot"></div>
-      <svg class="chat-icon" viewBox="0 0 24 24">
-        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
-      </svg>
-    `;
-    container.appendChild(button);
-
-    const chatWindow = document.createElement('div');
-    chatWindow.className = 'chat-window';
-    chatWindow.innerHTML = `
-      <div class="chat-header">
-        <h3>${this.settings.businessName}</h3>
-        <p>
-          <span class="status-indicator"></span>
-          ${this.settings.representativeName}
-        </p>
-      </div>
-      <div class="chat-messages"></div>
-      <div class="chat-input">
-        <input type="text" placeholder="Type your message...">
-        <button>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
-        </button>
-      </div>
-    `;
-    container.appendChild(chatWindow);
-
-    button.addEventListener('click', () => {
-      chatWindow.classList.toggle('open');
-      if (chatWindow.classList.contains('open')) {
-        chatWindow.querySelector('input').focus();
-        this.hasNewMessage = false;
-        this.updateNotificationIndicator();
-      }
-    });
-
-    const input = chatWindow.querySelector('input');
-    const sendButton = chatWindow.querySelector('button');
-
-    const sendMessage = () => {
-      const content = input.value.trim();
-      if (content) {
-        this.sendMessage(content, 'user');
-        input.value = '';
-      }
-    };
-
-    sendButton.addEventListener('click', sendMessage);
-    input.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        sendMessage();
-      }
-    });
-  }
-
-  renderMessage(message) {
-    const messagesContainer = document.querySelector('.chat-messages');
-    if (!messagesContainer) return;
-
-    const messageEl = document.createElement('div');
-    messageEl.className = `message ${message.sender}`;
-    
-    if (message.is_html) {
-      // Sanitize HTML content before rendering
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = message.content;
-      // Remove any script tags
-      const scripts = tempDiv.getElementsByTagName('script');
-      for (let i = scripts.length - 1; i >= 0; i--) {
-        scripts[i].remove();
-      }
-      messageEl.innerHTML = tempDiv.innerHTML;
-    } else {
-      messageEl.textContent = message.content;
-    }
-
-    // Add timestamp
-    const timestampEl = document.createElement('div');
-    timestampEl.className = 'text-xs text-gray-500 mt-1';
-    timestampEl.textContent = new Date(message.created_at).toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
-    messageEl.appendChild(timestampEl);
-
-    messagesContainer.appendChild(messageEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
 
