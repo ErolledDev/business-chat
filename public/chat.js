@@ -255,7 +255,7 @@ class BusinessChatPlugin {
 
   handleNewMessage(payload) {
     const message = payload.new;
-    if (message && message.sender !== 'user') {
+    if (message) {
       this.hideTypingIndicator();
       this.messages.push(message);
       this.renderMessage(message);
@@ -454,17 +454,21 @@ class BusinessChatPlugin {
         // Process the message through rules
         await this.processAutoReply(content);
       } else {
-        const { error } = await this.supabase
+        // For bot/ai/agent messages
+        const { data, error } = await this.supabase
           .from('chat_messages')
           .insert({
             session_id: this.sessionId,
             content,
             sender,
             is_html: isHtml,
-          });
+          })
+          .select()
+          .single();
 
         if (error) {
           console.error('Error sending message:', error);
+          // Fallback to local rendering if database insert fails
           this.renderMessage({
             content,
             sender,
@@ -473,6 +477,10 @@ class BusinessChatPlugin {
           });
           return;
         }
+
+        // Render the message from the database response
+        this.messages.push(data);
+        this.renderMessage(data);
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -666,9 +674,7 @@ class BusinessChatPlugin {
         border-radius: 16px 16px 4px 16px;
       }
 
-      .message.bot,
-      .message.ai,
-      .message.agent {
+      .message.bot {
         background: white;
         color: #1f2937;
         align-self: flex-start;
@@ -679,11 +685,17 @@ class BusinessChatPlugin {
       .message.ai {
         background: #f3e8ff;
         color: #6b21a8;
+        align-self: flex-start;
+        border-radius: 16px 16px 16px 4px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
 
       .message.agent {
         background: #e0f2fe;
         color: #075985;
+        align-self: flex-start;
+        border-radius: 16px 16px 16px 4px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
 
       .message.system {
@@ -868,10 +880,27 @@ class BusinessChatPlugin {
     messageEl.className = `message ${message.sender}`;
     
     if (message.is_html) {
-      messageEl.innerHTML = message.content;
+      // Sanitize HTML content before rendering
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = message.content;
+      // Remove any script tags
+      const scripts = tempDiv.getElementsByTagName('script');
+      for (let i = scripts.length - 1; i >= 0; i--) {
+        scripts[i].remove();
+      }
+      messageEl.innerHTML = tempDiv.innerHTML;
     } else {
       messageEl.textContent = message.content;
     }
+
+    // Add timestamp
+    const timestampEl = document.createElement('div');
+    timestampEl.className = 'text-xs text-gray-500 mt-1';
+    timestampEl.textContent = new Date(message.created_at).toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    messageEl.appendChild(timestampEl);
 
     messagesContainer.appendChild(messageEl);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
