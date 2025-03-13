@@ -20,19 +20,28 @@ class BusinessChatPlugin {
   }
 
   initSupabase() {
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/@supabase/supabase-js@2';
-    script.onload = () => {
-      this.supabase = supabaseClient.createClient(
-        'https://sxnjvsdpdbnreophnzup.supabase.co',
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0'
-      );
-      this.loadSettings();
-      this.initSession();
-      this.loadMessages();
-      this.initRealtime();
-    };
-    document.head.appendChild(script);
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      script.onload = () => {
+        try {
+          // Use the global supabase object that's now available
+          this.supabase = supabase.createClient(
+            'https://sxnjvsdpdbnreophnzup.supabase.co',
+            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0'
+          );
+          this.loadSettings();
+          this.initSession();
+          this.loadMessages();
+          this.initRealtime();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      script.onerror = (error) => reject(error);
+      document.head.appendChild(script);
+    });
   }
 
   async init() {
@@ -41,7 +50,7 @@ class BusinessChatPlugin {
       this.createWidget();
       
       // Initialize Supabase
-      this.initSupabase();
+      await this.initSupabase();
     } catch (error) {
       console.error('Error initializing chat widget:', error);
     }
