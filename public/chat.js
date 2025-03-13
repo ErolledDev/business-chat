@@ -383,20 +383,24 @@ class BusinessChatPlugin {
   }
 
   matchesRule(content, rule) {
-    const userContent = content.toLowerCase();
+    // Convert content to lowercase for case-insensitive matching
+    const userContent = content.toLowerCase().trim();
     
     switch (rule.match_type) {
       case 'exact':
+        // Check if any keyword exactly matches the entire user content
         return rule.keywords.some(keyword => 
-          userContent === keyword.toLowerCase()
+          userContent === keyword.toLowerCase().trim()
         );
       
       case 'fuzzy':
+        // Check if any keyword is included in the user content
         return rule.keywords.some(keyword =>
-          userContent.includes(keyword.toLowerCase())
+          userContent.includes(keyword.toLowerCase().trim())
         );
       
       case 'regex':
+        // Try to match using regular expressions
         return rule.keywords.some(keyword => {
           try {
             const regex = new RegExp(keyword, 'i');
@@ -408,9 +412,10 @@ class BusinessChatPlugin {
         });
       
       case 'synonym':
+        // Split user content into words and check if any keyword matches any word
         const words = userContent.split(/\s+/);
         return rule.keywords.some(keyword => 
-          words.includes(keyword.toLowerCase())
+          words.includes(keyword.toLowerCase().trim())
         );
       
       default:
