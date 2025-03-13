@@ -7,11 +7,13 @@ class ChatAPI {
   private settings: WidgetSettings;
   private messages: ChatMessage[];
   private welcomeMessageShown: boolean;
+  private sessionId: string | null;
 
   private constructor() {
     this.eventListeners = new Map();
     this.messages = [];
     this.welcomeMessageShown = false;
+    this.sessionId = null;
     this.settings = {
       businessName: 'My Business',
       representativeName: 'Support Agent',
@@ -57,8 +59,31 @@ class ChatAPI {
     return [...this.messages];
   }
 
+  private async initSession() {
+    try {
+      const visitorId = 'visitor_' + Math.random().toString(36).substr(2, 9);
+      const { data: session, error } = await supabase
+        .from('chat_sessions')
+        .insert({
+          visitor_id: visitorId,
+          status: 'active'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      this.sessionId = session.id;
+    } catch (error) {
+      console.error('Error initializing session:', error);
+    }
+  }
+
   public async addMessage(content: string, sender: ChatMessage['sender'], isHtml: boolean = false) {
     try {
+      if (!this.sessionId) {
+        await this.initSession();
+      }
+
       // Create message object
       const message: ChatMessage = {
         id: crypto.randomUUID(),
@@ -72,7 +97,20 @@ class ChatAPI {
       this.messages.push(message);
       this.emit('message', message);
 
-      // If it's a user message, handle auto-replies and AI
+      // Save to database
+      const { error } = await supabase
+        .from('chat_messages')
+        .insert({
+          session_id: this.sessionId,
+          content: message.content,
+          sender: message.sender,
+          is_html: message.isHtml,
+          status: 'sent'
+        });
+
+      if (error) throw error;
+
+      // If it's a user message, handle auto-replies
       if (sender === 'user') {
         this.settings.hasUnreadMessages = true;
         this.emit('unreadMessages', true);
@@ -84,11 +122,6 @@ class ChatAPI {
             this.addMessage(response.content, response.sender, response.isHtml);
           }, 1000);
         }
-      }
-
-      // Save to database if we're in live chat mode
-      if (this.settings.operatorMode === 'live') {
-        await this.saveMessageToDatabase(message);
       }
     } catch (error) {
       console.error('Error adding message:', error);
@@ -131,8 +164,13 @@ class ChatAPI {
       }
 
       // Check if AI is enabled
-      if (this.settings.aiModeEnabled) {
-        const aiResponse = await this.getAIResponse(content);
+      const { data: settings } = await supabase
+        .from('widget_settings')
+        .select('*')
+        .single();
+
+      if (settings?.ai_enabled) {
+        const aiResponse = await this.getAIResponse(content, settings.ai_context);
         return {
           content: aiResponse,
           sender: 'ai'
@@ -168,31 +206,17 @@ class ChatAPI {
             return false;
           }
         });
+      case 'synonym':
+        // Implement synonym matching if needed
+        return keywords.some(k => userContent.includes(k));
       default:
         return false;
     }
   }
 
-  private async getAIResponse(content: string): Promise<string> {
-    // Implement your AI logic here
+  private async getAIResponse(content: string, context?: string): Promise<string> {
+    // Implement your AI logic here using the context
     return `AI: I understand your message about "${content}". How can I help you further?`;
-  }
-
-  private async saveMessageToDatabase(message: ChatMessage) {
-    try {
-      const { error } = await supabase
-        .from('chat_messages')
-        .insert({
-          content: message.content,
-          sender: message.sender,
-          is_html: message.isHtml,
-          created_at: message.timestamp.toISOString()
-        });
-
-      if (error) throw error;
-    } catch (error) {
-      console.error('Error saving message to database:', error);
-    }
   }
 
   public getSettings(): WidgetSettings {

@@ -42,6 +42,9 @@ class BusinessChatPlugin {
 
       // Initialize realtime subscriptions
       this.initRealtime();
+
+      // Show welcome message
+      this.showWelcomeMessage();
     } catch (error) {
       console.error('Error initializing chat widget:', error);
     }
@@ -211,16 +214,22 @@ class BusinessChatPlugin {
     }
   }
 
-  async sendMessage(content, sender, isHtml = false) {
+  async sendMessage(content, sender = 'user', isHtml = false) {
     try {
       if (!this.sessionId || !content.trim()) return;
+
+      // Show typing indicator for user messages
+      if (sender === 'user') {
+        this.showTypingIndicator();
+      }
 
       // Create message object
       const message = {
         session_id: this.sessionId,
         content,
         sender,
-        is_html: isHtml
+        is_html: isHtml,
+        status: 'sent'
       };
 
       // Save to database
@@ -240,14 +249,113 @@ class BusinessChatPlugin {
       this.renderMessage(data);
       this.messageQueue.add(data.id);
 
-      // Show typing indicator for user messages
+      // If it's a user message, check for auto-replies
       if (sender === 'user') {
-        this.showTypingIndicator();
+        const response = await this.checkAutoReplies(content);
+        if (response) {
+          setTimeout(() => {
+            this.sendMessage(response.content, response.sender, response.isHtml);
+          }, 1000);
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
+    } finally {
       this.hideTypingIndicator();
     }
+  }
+
+  async checkAutoReplies(content) {
+    try {
+      // First check auto-reply rules
+      const { data: autoRules } = await this.supabase
+        .from('auto_reply_rules')
+        .select('*')
+        .eq('user_id', this.userId);
+
+      if (autoRules?.length > 0) {
+        for (const rule of autoRules) {
+          if (this.matchesRule(content, rule)) {
+            return {
+              content: rule.response,
+              sender: 'bot'
+            };
+          }
+        }
+      }
+
+      // Then check advanced rules
+      const { data: advancedRules } = await this.supabase
+        .from('advanced_reply_rules')
+        .select('*')
+        .eq('user_id', this.userId);
+
+      if (advancedRules?.length > 0) {
+        for (const rule of advancedRules) {
+          if (this.matchesRule(content, rule)) {
+            return {
+              content: rule.response,
+              sender: 'ai',
+              isHtml: rule.is_html
+            };
+          }
+        }
+      }
+
+      // Check if AI is enabled
+      const { data: settings } = await this.supabase
+        .from('widget_settings')
+        .select('ai_enabled, ai_context')
+        .eq('user_id', this.userId)
+        .single();
+
+      if (settings?.ai_enabled) {
+        const aiResponse = await this.getAIResponse(content, settings.ai_context);
+        return {
+          content: aiResponse,
+          sender: 'ai'
+        };
+      }
+
+      // Return fallback message if no rules match
+      return {
+        content: this.settings.fallbackMessage,
+        sender: 'bot'
+      };
+    } catch (error) {
+      console.error('Error checking auto-replies:', error);
+      return null;
+    }
+  }
+
+  matchesRule(content, rule) {
+    const userContent = content.toLowerCase();
+    const keywords = rule.keywords.map(k => k.toLowerCase());
+
+    switch (rule.match_type) {
+      case 'exact':
+        return keywords.some(k => userContent === k);
+      case 'fuzzy':
+        return keywords.some(k => userContent.includes(k));
+      case 'regex':
+        return keywords.some(k => {
+          try {
+            const regex = new RegExp(k, 'i');
+            return regex.test(content);
+          } catch (e) {
+            return false;
+          }
+        });
+      case 'synonym':
+        return keywords.some(k => userContent.includes(k));
+      default:
+        return false;
+    }
+  }
+
+  async getAIResponse(content, context) {
+    // Implement your AI logic here using the context
+    return `AI: I understand your message about "${content}". How can I help you further?`;
   }
 
   showTypingIndicator() {
