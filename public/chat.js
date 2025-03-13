@@ -19,6 +19,7 @@ class BusinessChatPlugin {
     this.hasNewMessage = false;
     this.messageQueue = new Set();
     this.welcomeMessageShown = false;
+    this.subscription = null;
 
     this.init();
   }
@@ -100,10 +101,7 @@ class BusinessChatPlugin {
           primaryColor: settings.primary_color,
           secondaryColor: settings.secondary_color,
           welcomeMessage: settings.welcome_message,
-          fallbackMessage: settings.fallback_message,
-          aiEnabled: settings.ai_enabled,
-          aiApiKey: settings.ai_api_key,
-          aiContext: settings.ai_context
+          fallbackMessage: settings.fallback_message
         };
         this.updateWidgetStyles();
         this.updateWidgetContent();
@@ -165,7 +163,12 @@ class BusinessChatPlugin {
   initRealtime() {
     if (!this.sessionId) return;
 
-    this.supabase
+    // Clean up existing subscription if any
+    if (this.subscription) {
+      this.subscription.unsubscribe();
+    }
+
+    this.subscription = this.supabase
       .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
         event: '*',
@@ -173,16 +176,6 @@ class BusinessChatPlugin {
         table: 'chat_messages',
         filter: `session_id=eq.${this.sessionId}`,
       }, this.handleNewMessage.bind(this))
-      .subscribe();
-
-    this.supabase
-      .channel(`chat_sessions:${this.sessionId}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'chat_sessions',
-        filter: `id=eq.${this.sessionId}`,
-      }, this.handleSessionUpdate.bind(this))
       .subscribe();
   }
 
@@ -197,19 +190,6 @@ class BusinessChatPlugin {
       if (!document.querySelector('.chat-window').classList.contains('open')) {
         this.hasNewMessage = true;
         this.updateNotificationIndicator();
-      }
-    }
-  }
-
-  handleSessionUpdate(payload) {
-    const session = payload.new;
-    if (session) {
-      if (session.status === 'closed') {
-        this.renderMessage({
-          content: 'Chat session ended',
-          sender: 'system',
-          created_at: new Date().toISOString()
-        });
       }
     }
   }
@@ -244,118 +224,12 @@ class BusinessChatPlugin {
         return;
       }
 
-      // Add to local messages and render
-      this.messages.push(data);
-      this.renderMessage(data);
-      this.messageQueue.add(data.id);
-
-      // If it's a user message, check for auto-replies
-      if (sender === 'user') {
-        const response = await this.checkAutoReplies(content);
-        if (response) {
-          setTimeout(() => {
-            this.sendMessage(response.content, response.sender, response.isHtml);
-          }, 1000);
-        }
-      }
+      // Message will be rendered through the realtime subscription
     } catch (error) {
       console.error('Error sending message:', error);
     } finally {
       this.hideTypingIndicator();
     }
-  }
-
-  async checkAutoReplies(content) {
-    try {
-      // First check auto-reply rules
-      const { data: autoRules } = await this.supabase
-        .from('auto_reply_rules')
-        .select('*')
-        .eq('user_id', this.userId);
-
-      if (autoRules?.length > 0) {
-        for (const rule of autoRules) {
-          if (this.matchesRule(content, rule)) {
-            return {
-              content: rule.response,
-              sender: 'bot'
-            };
-          }
-        }
-      }
-
-      // Then check advanced rules
-      const { data: advancedRules } = await this.supabase
-        .from('advanced_reply_rules')
-        .select('*')
-        .eq('user_id', this.userId);
-
-      if (advancedRules?.length > 0) {
-        for (const rule of advancedRules) {
-          if (this.matchesRule(content, rule)) {
-            return {
-              content: rule.response,
-              sender: 'ai',
-              isHtml: rule.is_html
-            };
-          }
-        }
-      }
-
-      // Check if AI is enabled
-      const { data: settings } = await this.supabase
-        .from('widget_settings')
-        .select('ai_enabled, ai_context')
-        .eq('user_id', this.userId)
-        .single();
-
-      if (settings?.ai_enabled) {
-        const aiResponse = await this.getAIResponse(content, settings.ai_context);
-        return {
-          content: aiResponse,
-          sender: 'ai'
-        };
-      }
-
-      // Return fallback message if no rules match
-      return {
-        content: this.settings.fallbackMessage,
-        sender: 'bot'
-      };
-    } catch (error) {
-      console.error('Error checking auto-replies:', error);
-      return null;
-    }
-  }
-
-  matchesRule(content, rule) {
-    const userContent = content.toLowerCase();
-    const keywords = rule.keywords.map(k => k.toLowerCase());
-
-    switch (rule.match_type) {
-      case 'exact':
-        return keywords.some(k => userContent === k);
-      case 'fuzzy':
-        return keywords.some(k => userContent.includes(k));
-      case 'regex':
-        return keywords.some(k => {
-          try {
-            const regex = new RegExp(k, 'i');
-            return regex.test(content);
-          } catch (e) {
-            return false;
-          }
-        });
-      case 'synonym':
-        return keywords.some(k => userContent.includes(k));
-      default:
-        return false;
-    }
-  }
-
-  async getAIResponse(content, context) {
-    // Implement your AI logic here using the context
-    return `AI: I understand your message about "${content}". How can I help you further?`;
   }
 
   showTypingIndicator() {
