@@ -6,6 +6,8 @@ class BusinessChatPlugin {
       primaryColor: '#2563eb',
       secondaryColor: '#1d4ed8',
       isLive: false,
+      welcomeMessage: "👋 Welcome! How can we help you today?",
+      fallbackMessage: "We've received your message and will get back to you soon!"
     };
 
     this.messages = [];
@@ -25,15 +27,10 @@ class BusinessChatPlugin {
       script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
       script.onload = () => {
         try {
-          // Use the global supabase object that's now available
-          this.supabase = supabase.createClient(
+          this.supabase = window.supabase.createClient(
             'https://sxnjvsdpdbnreophnzup.supabase.co',
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0'
           );
-          this.loadSettings();
-          this.initSession();
-          this.loadMessages();
-          this.initRealtime();
           resolve();
         } catch (error) {
           reject(error);
@@ -51,8 +48,33 @@ class BusinessChatPlugin {
       
       // Initialize Supabase
       await this.initSupabase();
+
+      // Load settings first
+      await this.loadSettings();
+
+      // Then initialize session
+      await this.initSession();
+
+      // Load existing messages
+      await this.loadMessages();
+
+      // Initialize realtime subscriptions
+      this.initRealtime();
+
+      // Show welcome message
+      this.showWelcomeMessage();
     } catch (error) {
       console.error('Error initializing chat widget:', error);
+    }
+  }
+
+  showWelcomeMessage() {
+    if (this.messages.length === 0) {
+      this.renderMessage({
+        content: this.settings.welcomeMessage,
+        sender: 'bot',
+        created_at: new Date().toISOString()
+      });
     }
   }
 
@@ -71,6 +93,8 @@ class BusinessChatPlugin {
           representativeName: settings.representative_name,
           primaryColor: settings.primary_color,
           secondaryColor: settings.secondary_color,
+          welcomeMessage: settings.welcome_message,
+          fallbackMessage: settings.fallback_message
         };
         this.updateWidgetStyles();
         this.updateWidgetContent();
@@ -148,7 +172,7 @@ class BusinessChatPlugin {
 
   handleNewMessage(payload) {
     const message = payload.new;
-    if (message) {
+    if (message && message.sender !== 'user') {
       this.hideTypingIndicator();
       this.messages.push(message);
       this.renderMessage(message);
@@ -162,7 +186,6 @@ class BusinessChatPlugin {
   handleSessionUpdate(payload) {
     const session = payload.new;
     if (session) {
-      // Update session status
       if (session.status === 'closed') {
         this.renderMessage({
           content: 'Chat session ended',
@@ -180,10 +203,8 @@ class BusinessChatPlugin {
     switch (rule.match_type) {
       case 'exact':
         return keywords.some(keyword => userContent === keyword);
-      
       case 'fuzzy':
         return keywords.some(keyword => userContent.includes(keyword));
-      
       case 'regex':
         return keywords.some(keyword => {
           try {
@@ -194,11 +215,9 @@ class BusinessChatPlugin {
             return false;
           }
         });
-      
       case 'synonym':
         const words = userContent.split(/\s+/);
         return keywords.some(keyword => words.includes(keyword));
-      
       default:
         return false;
     }
@@ -212,7 +231,7 @@ class BusinessChatPlugin {
         .select('*')
         .eq('user_id', this.userId);
 
-      if (autoRules) {
+      if (autoRules && autoRules.length > 0) {
         for (const rule of autoRules) {
           if (await this.matchesRule(content, rule)) {
             return { type: 'auto', response: rule.response };
@@ -226,7 +245,7 @@ class BusinessChatPlugin {
         .select('*')
         .eq('user_id', this.userId);
 
-      if (advancedRules) {
+      if (advancedRules && advancedRules.length > 0) {
         for (const rule of advancedRules) {
           if (await this.matchesRule(content, rule)) {
             return { 
@@ -238,26 +257,25 @@ class BusinessChatPlugin {
         }
       }
 
-      return null;
+      // If no rules match, return fallback message
+      return { 
+        type: 'bot', 
+        response: this.settings.fallbackMessage 
+      };
     } catch (error) {
       console.error('Error checking rules:', error);
-      return null;
+      return { 
+        type: 'bot', 
+        response: this.settings.fallbackMessage 
+      };
     }
   }
 
   async sendMessage(content, sender, isHtml = false) {
     try {
-      if (!this.sessionId) return;
+      if (!this.sessionId || !content.trim()) return;
 
-      // First render the message locally
-      this.renderMessage({
-        content,
-        sender,
-        is_html: isHtml,
-        created_at: new Date().toISOString()
-      });
-
-      // Then save to database
+      // First save to database
       const { data, error } = await this.supabase
         .from('chat_messages')
         .insert({
@@ -273,6 +291,14 @@ class BusinessChatPlugin {
         console.error('Error sending message:', error);
         return;
       }
+
+      // Then render the message
+      this.renderMessage({
+        content,
+        sender,
+        is_html: isHtml,
+        created_at: new Date().toISOString()
+      });
 
       // If it's a user message, check for auto-replies
       if (sender === 'user') {
@@ -680,6 +706,7 @@ class BusinessChatPlugin {
         chatWindow.querySelector('input').focus();
         this.hasNewMessage = false;
         this.updateNotificationIndicator();
+        this.showWelcomeMessage();
       }
     });
 
