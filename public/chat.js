@@ -650,98 +650,59 @@ class BusinessChatPlugin {
         gap: 12px;
       }
 
-      .message-group {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        max-width: 85%;
-        margin-bottom: 12px;
-        width: 100%;
-      }
-
-      .message-group.user {
-        align-self: flex-end;
-      }
-
-      .message-group.bot,
-      .message-group.ai,
-      .message-group.agent {
-        align-self: flex-start;
-      }
-
-      .message-time {
-        font-size: 0.75em;
-        color: #64748b;
-        margin: 4px 8px 0;
-      }
-
-      .message-group.user .message-time {
-        text-align: right;
-      }
-
       .message {
-        word-wrap: break-word;
         padding: 12px 16px;
         border-radius: 16px;
+        max-width: 80%;
+        margin-bottom: 8px;
+        word-wrap: break-word;
         position: relative;
-        font-size: 0.95em;
-        line-height: 1.4;
-        max-width: 100%;
-        width: fit-content;
       }
 
       .message.user {
         background: ${this.settings.primaryColor};
         color: white;
-        border-radius: 16px 16px 4px 16px;
         align-self: flex-end;
-        margin-left: auto;
+        border-radius: 16px 16px 4px 16px;
       }
 
-      .message.bot {
+      .message.bot,
+      .message.ai,
+      .message.agent {
         background: white;
         color: #1f2937;
+        align-self: flex-start;
         border-radius: 16px 16px 16px 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        align-self: flex-start;
       }
 
       .message.ai {
         background: #f3e8ff;
         color: #6b21a8;
-        border-radius: 16px 16px 16px 4px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        align-self: flex-start;
       }
 
       .message.agent {
         background: #e0f2fe;
         color: #075985;
-        border-radius: 16px 16px 16px 4px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        align-self: flex-start;
       }
 
       .message.system {
-        align-self: center;
         background: rgba(0, 0, 0, 0.05);
         color: #64748b;
         font-size: 0.85em;
-        padding: 8px 12px;
-        border-radius: 12px;
-        max-width: 90%;
+        align-self: center;
         text-align: center;
-        margin: 8px 0;
+        border-radius: 12px;
       }
 
       .typing-indicator {
-        align-self: flex-start;
         display: flex;
         gap: 4px;
         padding: 12px 16px;
         background: white;
         border-radius: 16px;
-        margin: 4px 0;
+        align-self: flex-start;
+        margin-bottom: 8px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
 
@@ -903,12 +864,6 @@ class BusinessChatPlugin {
     const messagesContainer = document.querySelector('.chat-messages');
     if (!messagesContainer) return;
 
-    const time = new Date(message.created_at).toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
-
-    // Create message element
     const messageEl = document.createElement('div');
     messageEl.className = `message ${message.sender}`;
     
@@ -918,18 +873,7 @@ class BusinessChatPlugin {
       messageEl.textContent = message.content;
     }
 
-    // Add timestamp
-    const timeEl = document.createElement('div');
-    timeEl.className = 'message-time';
-    timeEl.textContent = time;
-
-    // Create message group
-    const messageGroup = document.createElement('div');
-    messageGroup.className = `message-group ${message.sender}`;
-    messageGroup.appendChild(messageEl);
-    messageGroup.appendChild(timeEl);
-    
-    messagesContainer.appendChild(messageGroup);
+    messagesContainer.appendChild(messageEl);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
