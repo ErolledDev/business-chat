@@ -19,28 +19,29 @@ class BusinessChatPlugin {
     this.init();
   }
 
-  async init() {
-    try {
-      // Create Supabase client
-      this.supabase = supabase.createClient(
+  initSupabase() {
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/@supabase/supabase-js@2';
+    script.onload = () => {
+      this.supabase = supabaseClient.createClient(
         'https://sxnjvsdpdbnreophnzup.supabase.co',
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4bmp2c2RwZGJucmVvcGhuenVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NDMwODMsImV4cCI6MjA1NzMxOTA4M30.NV4B_uhKQBefzeu3mdmNCPs87TKNlVi50dqwfgOvHf0'
       );
-
-      // Load settings
-      await this.loadSettings();
-
-      // Create widget
-      this.createWidget();
-
-      // Initialize chat session
-      await this.initSession();
-
-      // Load existing messages
-      await this.loadMessages();
-
-      // Initialize realtime subscriptions
+      this.loadSettings();
+      this.initSession();
+      this.loadMessages();
       this.initRealtime();
+    };
+    document.head.appendChild(script);
+  }
+
+  async init() {
+    try {
+      // Create widget first
+      this.createWidget();
+      
+      // Initialize Supabase
+      this.initSupabase();
     } catch (error) {
       console.error('Error initializing chat widget:', error);
     }
@@ -62,6 +63,8 @@ class BusinessChatPlugin {
           primaryColor: settings.primary_color,
           secondaryColor: settings.secondary_color,
         };
+        this.updateWidgetStyles();
+        this.updateWidgetContent();
       }
     } catch (error) {
       console.error('Error loading settings:', error);
