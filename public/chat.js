@@ -27,6 +27,7 @@ class BusinessChatPlugin {
     this.isTyping = false;
     this.typingTimeout = null;
     this.hasNewMessage = false;
+    this.messageSubscription = null;
     this.init();
   }
 
@@ -232,7 +233,13 @@ class BusinessChatPlugin {
   initRealtime() {
     if (!this.sessionId) return;
 
-    this.supabase
+    // Clean up existing subscription if any
+    if (this.messageSubscription) {
+      this.messageSubscription.unsubscribe();
+    }
+
+    // Subscribe to new messages
+    this.messageSubscription = this.supabase
       .channel(`chat_messages:${this.sessionId}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -242,6 +249,7 @@ class BusinessChatPlugin {
       }, this.handleNewMessage.bind(this))
       .subscribe();
 
+    // Subscribe to session updates
     this.supabase
       .channel(`chat_sessions:${this.sessionId}`)
       .on('postgres_changes', {
@@ -255,13 +263,16 @@ class BusinessChatPlugin {
 
   handleNewMessage(payload) {
     const message = payload.new;
-    if (message) {
+    if (message && message.session_id === this.sessionId) {
       this.hideTypingIndicator();
-      this.messages.push(message);
-      this.renderMessage(message);
-      if (!document.querySelector('.chat-window').classList.contains('open')) {
-        this.hasNewMessage = true;
-        this.updateNotificationIndicator();
+      // Only add the message if it's not already in the messages array
+      if (!this.messages.some(m => m.id === message.id)) {
+        this.messages.push(message);
+        this.renderMessage(message);
+        if (!document.querySelector('.chat-window').classList.contains('open')) {
+          this.hasNewMessage = true;
+          this.updateNotificationIndicator();
+        }
       }
     }
   }
@@ -383,25 +394,22 @@ class BusinessChatPlugin {
   }
 
   matchesRule(content, rule) {
-    // Convert content to lowercase for case-insensitive matching
+    // Convert content and keywords to lowercase for case-insensitive matching
     const userContent = content.toLowerCase().trim();
+    const keywords = rule.keywords.map(k => k.toLowerCase().trim());
     
     switch (rule.match_type) {
       case 'exact':
         // Check if any keyword exactly matches the entire user content
-        return rule.keywords.some(keyword => 
-          userContent === keyword.toLowerCase().trim()
-        );
+        return keywords.some(keyword => userContent === keyword);
       
       case 'fuzzy':
         // Check if any keyword is included in the user content
-        return rule.keywords.some(keyword =>
-          userContent.includes(keyword.toLowerCase().trim())
-        );
+        return keywords.some(keyword => userContent.includes(keyword));
       
       case 'regex':
         // Try to match using regular expressions
-        return rule.keywords.some(keyword => {
+        return keywords.some(keyword => {
           try {
             const regex = new RegExp(keyword, 'i');
             return regex.test(content);
@@ -414,9 +422,7 @@ class BusinessChatPlugin {
       case 'synonym':
         // Split user content into words and check if any keyword matches any word
         const words = userContent.split(/\s+/);
-        return rule.keywords.some(keyword => 
-          words.includes(keyword.toLowerCase().trim())
-        );
+        return keywords.some(keyword => words.includes(keyword));
       
       default:
         return false;
@@ -473,19 +479,10 @@ class BusinessChatPlugin {
 
         if (error) {
           console.error('Error sending message:', error);
-          // Fallback to local rendering if database insert fails
-          this.renderMessage({
-            content,
-            sender,
-            is_html: isHtml,
-            created_at: new Date().toISOString()
-          });
           return;
         }
 
-        // Render the message from the database response
-        this.messages.push(data);
-        this.renderMessage(data);
+        // Message will be rendered through the realtime subscription
       }
     } catch (error) {
       console.error('Error sending message:', error);
