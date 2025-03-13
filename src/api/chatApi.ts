@@ -1,14 +1,17 @@
 import { ChatMessage, WidgetSettings } from '../types/chat';
+import { supabase } from '../lib/supabase';
 
 class ChatAPI {
   private static instance: ChatAPI;
   private eventListeners: Map<string, Set<Function>>;
   private settings: WidgetSettings;
   private messages: ChatMessage[];
+  private welcomeMessageShown: boolean;
 
   private constructor() {
     this.eventListeners = new Map();
     this.messages = [];
+    this.welcomeMessageShown = false;
     this.settings = {
       businessName: 'My Business',
       representativeName: 'Support Agent',
@@ -35,7 +38,6 @@ class ChatAPI {
     return ChatAPI.instance;
   }
 
-  // Event handling
   public on(event: string, callback: Function) {
     if (!this.eventListeners.has(event)) {
       this.eventListeners.set(event, new Set());
@@ -51,29 +53,148 @@ class ChatAPI {
     this.eventListeners.get(event)?.forEach(callback => callback(data));
   }
 
-  // Messages
   public getMessages(): ChatMessage[] {
     return [...this.messages];
   }
 
-  public addMessage(content: string, sender: ChatMessage['sender'], isHtml: boolean = false) {
-    const message: ChatMessage = {
-      id: crypto.randomUUID(),
-      content,
-      sender,
-      timestamp: new Date(),
-      isHtml,
-    };
-    this.messages.push(message);
-    this.emit('message', message);
+  public async addMessage(content: string, sender: ChatMessage['sender'], isHtml: boolean = false) {
+    try {
+      // Create message object
+      const message: ChatMessage = {
+        id: crypto.randomUUID(),
+        content,
+        sender,
+        timestamp: new Date(),
+        isHtml,
+      };
 
-    if (!this.settings.isOnline && sender === 'user') {
-      this.settings.hasUnreadMessages = true;
-      this.emit('unreadMessages', true);
+      // Add to local messages
+      this.messages.push(message);
+      this.emit('message', message);
+
+      // If it's a user message, handle auto-replies and AI
+      if (sender === 'user') {
+        this.settings.hasUnreadMessages = true;
+        this.emit('unreadMessages', true);
+
+        // Check for auto-replies
+        const response = await this.checkAutoReplies(content);
+        if (response) {
+          setTimeout(() => {
+            this.addMessage(response.content, response.sender, response.isHtml);
+          }, 1000);
+        }
+      }
+
+      // Save to database if we're in live chat mode
+      if (this.settings.operatorMode === 'live') {
+        await this.saveMessageToDatabase(message);
+      }
+    } catch (error) {
+      console.error('Error adding message:', error);
     }
   }
 
-  // Settings
+  private async checkAutoReplies(content: string): Promise<{ content: string; sender: ChatMessage['sender']; isHtml?: boolean } | null> {
+    try {
+      // First check auto-reply rules
+      const { data: autoRules } = await supabase
+        .from('auto_reply_rules')
+        .select('*');
+
+      if (autoRules) {
+        for (const rule of autoRules) {
+          if (this.matchesRule(content, rule)) {
+            return {
+              content: rule.response,
+              sender: 'bot'
+            };
+          }
+        }
+      }
+
+      // Then check advanced rules
+      const { data: advancedRules } = await supabase
+        .from('advanced_reply_rules')
+        .select('*');
+
+      if (advancedRules) {
+        for (const rule of advancedRules) {
+          if (this.matchesRule(content, rule)) {
+            return {
+              content: rule.response,
+              sender: 'ai',
+              isHtml: rule.is_html
+            };
+          }
+        }
+      }
+
+      // Check if AI is enabled
+      if (this.settings.aiModeEnabled) {
+        const aiResponse = await this.getAIResponse(content);
+        return {
+          content: aiResponse,
+          sender: 'ai'
+        };
+      }
+
+      // Return fallback message if no rules match
+      return {
+        content: this.settings.fallbackMessage,
+        sender: 'bot'
+      };
+    } catch (error) {
+      console.error('Error checking auto-replies:', error);
+      return null;
+    }
+  }
+
+  private matchesRule(content: string, rule: any): boolean {
+    const userContent = content.toLowerCase();
+    const keywords = rule.keywords.map((k: string) => k.toLowerCase());
+
+    switch (rule.match_type) {
+      case 'exact':
+        return keywords.some(k => userContent === k);
+      case 'fuzzy':
+        return keywords.some(k => userContent.includes(k));
+      case 'regex':
+        return keywords.some(k => {
+          try {
+            const regex = new RegExp(k, 'i');
+            return regex.test(content);
+          } catch (e) {
+            return false;
+          }
+        });
+      default:
+        return false;
+    }
+  }
+
+  private async getAIResponse(content: string): Promise<string> {
+    // Implement your AI logic here
+    return `AI: I understand your message about "${content}". How can I help you further?`;
+  }
+
+  private async saveMessageToDatabase(message: ChatMessage) {
+    try {
+      const { error } = await supabase
+        .from('chat_messages')
+        .insert({
+          content: message.content,
+          sender: message.sender,
+          is_html: message.isHtml,
+          created_at: message.timestamp.toISOString()
+        });
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error saving message to database:', error);
+    }
+  }
+
   public getSettings(): WidgetSettings {
     return { ...this.settings };
   }
@@ -99,6 +220,13 @@ class ChatAPI {
   public clearUnreadMessages() {
     this.settings.hasUnreadMessages = false;
     this.emit('unreadMessages', false);
+  }
+
+  public showWelcomeMessage() {
+    if (!this.welcomeMessageShown) {
+      this.addMessage(this.settings.welcomeMessage, 'bot');
+      this.welcomeMessageShown = true;
+    }
   }
 }
 

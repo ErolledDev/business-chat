@@ -11,6 +11,7 @@ interface ChatState {
   updateSettings: (settings: Partial<WidgetSettings>) => void;
   setOperatorMode: (mode: 'ai' | 'live' | 'auto') => void;
   toggleOnlineStatus: () => void;
+  clearMessages: () => void;
 }
 
 export const useChatStore = create<ChatState>((set) => {
@@ -47,6 +48,9 @@ export const useChatStore = create<ChatState>((set) => {
     },
     toggleOnlineStatus: () => {
       chatApi.toggleOnlineStatus();
+    },
+    clearMessages: () => {
+      set({ messages: [] });
     },
   };
 });
